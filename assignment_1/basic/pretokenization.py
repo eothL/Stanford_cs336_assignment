@@ -1,5 +1,11 @@
 import os
 from typing import BinaryIO
+from basic import pretokenizer_simple, pretokenizer_compile 
+from collections import Counter
+import cProfile
+import pstats
+import multiprocessing
+
 
 
 def find_chunk_boundaries(
@@ -17,7 +23,6 @@ def find_chunk_boundaries(
     file.seek(0, os.SEEK_END)
     file_size = file.tell()
     file.seek(0)
-
     chunk_size = file_size // desired_num_chunks
 
     # Initial guesses for chunk boundary locations, uniformly spaced
@@ -48,15 +53,30 @@ def find_chunk_boundaries(
     # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
     return sorted(set(chunk_boundaries))
 
+def main():
+    with open(..., "rb") as f:
+        num_processes = 4
+        special_tokens= ["<|endoftext|>"]
+        boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+
+        # base pattern used in GPT 2
+        base_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+        pretokenize_total = Counter()
+        # The following is a serial implementation, but you can parallelize this
+        # by sending each start/end pair to a set of processes.
+        for start, end in zip(boundaries[:-1], boundaries[1:]):
+            f.seek(start)
+            chunk = f.read(end - start).decode("utf-8", errors="ignore")
+            # Run pre-tokenization on your chunk and store the counts for each pre-token
+            pretokenised_chunck = pretokenizer_simple.pretokenize(base_pattern=base_pattern,text=chunk,special_tokens=special_tokens)
+            pretokenize_total.update(pretokenised_chunck)
 
 ## Usage
-with open(..., "rb") as f:
-    num_processes = 4
-    boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+if __name__ == "__main__":
+    with cProfile.Profile() as profile:
+        
 
-    # The following is a serial implementation, but you can parallelize this
-    # by sending each start/end pair to a set of processes.
-    for start, end in zip(boundaries[:-1], boundaries[1:]):
-        f.seek(start)
-        chunk = f.read(end - start).decode("utf-8", errors="ignore")
-        # Run pre-tokenization on your chunk and store the counts for each pre-token
+    
+
+

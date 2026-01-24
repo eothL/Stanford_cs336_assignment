@@ -1,0 +1,9 @@
+
+# any folder containing "data" in its name
+*data*/
+*Data*/
+
+.pyc
+__pycache__/
+
+local/
