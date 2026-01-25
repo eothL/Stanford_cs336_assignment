@@ -60,11 +60,12 @@ def _count_chunck(
         end: int,
         PAT: Pattern,
 )-> Counter:
+    """worker function for multiprocessing return a pretokenize of a chunck"""
     with open(data_path, "rb") as f:
         f.seek(start)
         chunk = f.read(end - start).decode("utf-8",errors="ignore")
-        freq = pretokenizer.pretokenize(PAT=PAT,text=chunk)
-    return freq
+        counts = pretokenizer.pretokenize_string_count(PAT=PAT,text=chunk)
+    return counts
 
 def count_pretokens_parallel(
         data_path: str,
@@ -73,7 +74,7 @@ def count_pretokens_parallel(
         special_tokens: list[str],
         split_special_token: str,
         *,
-        boundaries: Sequence[int] | None = None,
+        boundaries: Sequence[int] | None = None, # if it is compute outside of the loop
         debug: bool= False
 )->Counter[bytes]:
     """
@@ -89,16 +90,19 @@ def count_pretokens_parallel(
                 )
 
     PAT = pretokenizer.compile_pattern(base_pattern,special_tokens)
+
     tasks = [(data_path, s, e, PAT) for s, e in zip(boundaries[:-1], boundaries[1:])]
 
     with mp.Pool(processes=num_processes) as pool:
-        counters = pool.starmap(_count_chunck, tasks, chunksize=1)
+        counters = pool.starmap(_count_chunck, tasks, chunksize=1) # keep chunk size to one, increasing it reduce performance
 
 
-    counts = Counter()
+    counts_string = Counter()
     for c in counters:
-        counts.update(c)
+        counts_string.update(c)
     
+    counts = pretokenizer.encoding_pretokenizer_counts(counts_string)
+
     if debug:
         total = sum(counts.values())
         print("data_path:", os.path.abspath(data_path))
@@ -109,7 +113,7 @@ def count_pretokens_parallel(
  
 def main_parallel():
     HERE = os.path.dirname(os.path.abspath(__file__))
-    data_path = os.path.join(HERE, "..", "data","tinystories_train.txt")
+    data_path = os.path.join(HERE, "..", "data","openwebtext_train.txt")
     
     num_processes = os.cpu_count() - 1 
     print("num_process:", num_processes)
@@ -167,11 +171,26 @@ if __name__ == "__main__":
     result.sort_stats(pstats.SortKey.TIME)
     result.print_stats(20)
     """
-    training set 
+    on openwebtext_train.txt
+    it takes 109 s with 15 588 502 called function
+    total_pretokens: 2475971866
+    unique_pretokens: 6605727
+    
+    and 92.04 s with 22 157 501 function calls we have more called function but improved in time
+    6605742    0.402    0.000    0.402    0.000 {method 'encode' of 'str' objects}
+
+    training set of tinystories 
     17s using chunking + parallelism + compiled pattern
     17s using chuncking + parallelism + baseline pretokenizer
     same time, don't save that much time with parallelism
-    
+
+    with encoding at the end we have 12.681 : crazy how simple solution makes huges differences
+    407370 function calls
+    total_pretokens: 539 317 083
+    unique_pretokens: 59 921
+    and on the validation set : 0.247 s huge improvement lol, the bigger the corpus are the bigger impact
+    116764 function calls 
+
     running under 13 process + TinyStories validation set
     with chunking + baseline pretokeniser
     16 135 569 function calls in 3.12s in average for the tiny stories validation set

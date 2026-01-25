@@ -1,4 +1,5 @@
-# this version use re.compile to use the pattern
+# In this file, I add some upgrade to the function and try some techniques
+# re.compiled pattern, caching and simple idea like encoding at the end instead of each time xD
 
 
 import regex as re
@@ -8,14 +9,49 @@ def pretokenize(
         PAT: re.Pattern,
         text: str, 
         )-> Counter[bytes]:
-    """ based on a pattern and ignoring the special tokens in a text, return a mapping of dict of bytes sequences to its frequency in the text"""        
+    """ based on a pattern and ignoring special tokens in a text, return a mapping of dict of bytes sequences to its frequency in the text"""        
         
-    freq : Counter[bytes] = Counter()
-    for match in PAT.finditer(text):
-        freq[match.group(0).encode("utf-8")] += 1
+    counts : Counter[bytes] = Counter()
 
-    # find all the matches in the text, now we group them with counter and dict
-    return freq
+    # go through the corpus, and find all the world with similar pattern and add it to the dict 
+    for match in PAT.finditer(text):
+        counts[match.group(0).encode("utf-8")] += 1
+
+    return counts
+
+# --------------- Others solutions --------------
+# Encoding at the end instead at each step
+def pretokenize_string_count(
+        PAT:re.Pattern,
+        text:str,
+)-> Counter[str]:
+    """encode string after counting at the end of the process"""
+    str_counts = Counter(m.group(0) for m in PAT.finditer(text))
+    return str_counts
+
+def encoding_pretokenizer_counts(
+        str_counts: Counter[str],
+):
+    """Return encoded in utf-8 of a pretokenizer with string types as key value"""
+    return Counter({s.encode("utf-8"): c for s,c  in str_counts.items()})
+
+
+# cached version but not clear value against encoding at the end
+def pretokenize_cached(
+        PAT:re.Pattern,
+        text:str,
+)-> Counter[bytes]:
+    """Space complexity of this solution:
+    let u be the number of unique tokens"""
+    counts = Counter()
+    cache :dict[str,bytes] = {}
+    for m in PAT.finditer(text):
+        s = m.group(0)
+        b = cache.get(s)
+        if b is None:
+            b = cache[s] = s.encode("utf-8")
+        counts[b] += 1
+    return counts
 
 
 def merging_pattern(
@@ -56,8 +92,8 @@ def main():
         raw = f.read() if max_bytes == 0 else f.read(max_bytes)
     text = raw.decode("utf-8", errors="ignore")
 
-    counts = pretokenize(text=text, PAT= compile_pattern(base_pattern= base_pattern, special_tokens=special_tokens ))
-
+    counts = encoding_pretokenizer_counts(pretokenize_string_count(text=text, PAT= compile_pattern(base_pattern= base_pattern, special_tokens=special_tokens )))
+    # counts = pretokenize_cached(PAT= compile_pattern(base_pattern,special_tokens), text=text)
     total = sum(counts.values())
     print("data_path:", os.path.abspath(data_path))
     print("total_pretokens:", total)
@@ -74,3 +110,21 @@ if __name__ == "__main__":
     result = pstats.Stats(pr)
     result.sort_stats(pstats.SortKey.TIME)
     result.print_stats(20)
+
+    """
+    with compiled regex
+    10 910 760 function calls in 2.58s in average for the tiny stories validation set
+    13111 unique token
+    5446705 pretokens
+
+    Using encoding at the end of counting:
+    10 910 800 function calls in 2.05 s in average for tiny stories 
+    
+    Using caching we save few s for this example but for larger corpus we can see more result
+    2.54
+    10 923 871
+    """
+      
+    
+    
+    
