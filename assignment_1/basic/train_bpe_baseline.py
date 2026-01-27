@@ -16,6 +16,37 @@ def _update_sequence_list(seq: list[bytes],sym_a: bytes, sym_b:bytes):
             i += 1
     return out 
 
+def _most_common_pairs(
+        pair_counts:Counter[tuple[bytes,bytes]],
+        Ranking_criteria= lambda kv:(kv[1],kv[0])
+)-> tuple[(bytes,bytes),int]:
+    """Return the most common pair of bytes based on the ranking criterion : (counts, bytes value if tie)"""
+        # # get the first most common pairs 
+        # (sym_a,sym_b), _ = pair_counts.most_common(1)[0] # return n list of (element, count) pairs sorted by count descending
+        # We have to deal with tie count for pairs and having a deterministic rule to choose
+        # we can either use min or max for this 
+        # (sym_a,sym_b), _ = min(
+        #     pair_counts.items(), # all (pairs, counts)
+        #     key = lambda kv: (-kv[1],kv[0]) # picking the smallest key value with min()
+        #     # find highest count, with (-)-> -higher value = smaller negativer value
+        #     # if tie, pick by dictionary order smallest pair
+        #     )
+        # this solution passed for the test, i think the reference function used max count then lexicograpihcally largest pair
+    return max(pair_counts.items(),key= Ranking_criteria)
+
+
+def _get_pairs_counts(
+        sequence_list:list[list[bytes],int]
+)->Counter[tuple[bytes,bytes],int]:
+    """Return a dict of pairs of tuple and theirs frequencies"""
+    pair_counts = Counter()
+
+    for seq, seq_count in sequence_list:
+        for sym_a, sym_b in zip(seq,seq[1:]):
+            pair_counts[(sym_a, sym_b)] += seq_count 
+
+    return pair_counts
+
 # vocab_size = 50304 instead of 50357 to increase occupancy in gpu as 50357 is a multiple of 64
 def train_bpe(
         counts: Counter[bytes],
@@ -60,31 +91,12 @@ def train_bpe(
     # example (b' that', 23033864) -> ([b" ", b"t", b"h", b"a", b"t"], 23033864)
 
     for _ in range (num_merges):
-        pair_counts = Counter()
-
-        for seq, seq_count in sequence_list:
-            for sym_a, sym_b in zip(seq,seq[1:]):
-                pair_counts[(sym_a, sym_b)] += seq_count 
+        pair_counts = _get_pairs_counts(sequence_list)
 
         if not pair_counts: 
             break 
         
-        # # get the first most common pairs 
-        # (sym_a,sym_b), _ = pair_counts.most_common(1)[0] # return n list of (element, count) pairs sorted by count descending
-        # We have to deal with tie count for pairs and having a deterministic rule to choose
-        # we can either use min or max for this 
-        # (sym_a,sym_b), _ = min(
-        #     pair_counts.items(), # all (pairs, counts)
-        #     key = lambda kv: (-kv[1],kv[0]) # picking the smallest key value with min()
-        #     # find highest count, with (-)-> -higher value = smaller negativer value
-        #     # if tie, pick by dictionary order smallest pair
-        #     )
-        # this solution passed for the test, i think the reference function used max count then lexicograpihcally largest pair
-        (sym_a, sym_b), _ = max(
-            pair_counts.items(),
-            key= lambda kv : (kv[1],kv[0])
-        )
-
+        (sym_a, sym_b), _ = _most_common_pairs(pair_counts)
 
         new_bytes = sym_a + sym_b
         new_id = len(vocab)
