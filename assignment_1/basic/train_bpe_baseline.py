@@ -145,5 +145,13 @@ if __name__ == "__main__":
     232628473  116.355    0.000  172.455    0.000 basic/train_bpe_baseline.py:12(_update_sequence_list)
     
     -> should use in-place method 
+    instead of using .most_common(), max() function is used to find the best pairs
+    result:
+    num_process: 13
+    Base vocabulary size: 257
+    final vocab size: 18016
+    Total merges performed: 17759
+    2077116716 function calls (2077116307 primitive calls) in 287.666 seconds
+    17802/17801    9.666    0.001   14.745    0.001 {built-in method builtins.max}
     """
     
