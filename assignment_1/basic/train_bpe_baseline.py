@@ -1,23 +1,14 @@
-import cProfile
-import pstats
-from pretokenization import count_pretokens_parallel
-from dataclasses import dataclass
+from .pretokenization import count_pretokens_parallel
 from collections import Counter
 import os 
-
-def _get_compression_rate(vocab: dict[bytes,int], text: str)-> float:
-
-    number_bytes = len(bytes(text, encoding="utf-8"))
-    number_tokens = len(vocab.items) 
-    return number_bytes / number_tokens
 
 def _update_sequence_list(seq: list[bytes],sym_a: bytes, sym_b:bytes):
     """reconstruct an updated sequence"""
     out = []
     i = 0
     while i < len(seq):
-        # update only the merged sequences
-        if seq[i] == sym_a and seq[i+1] == sym_b:
+        # update only the merged sequences and reconstruct the rest of the list
+        if i+1 < len(seq) and seq[i] == sym_a and seq[i+1] == sym_b:
             out.append(seq[i] + seq[i+1])
             i += 2
         else:
@@ -56,16 +47,19 @@ def train_bpe(
 
     # every pretoken can be considered as sequence of symbol/character for example "word" = ["w","o","r","d"]
     # decomposing into sequence for the merging
+    special_tokens_bytes = {t.encode("utf-8") for t in special_tokens}
+
     sequence_list =[
-        ([bytes([sym]) for sym in word], # sequence of symbol/character
-        count)                           # frequence of the sequence in the corpus
-        for word, count in counts.items()
+        (
+            [word] if word in special_tokens_bytes # keep intact special token
+            else [bytes([sym]) for sym in word],   # decompose word in a sequence of symbol
+            count                                  # frequence of the whole sequence in the corpus
+        )
+        for word, count in counts.items()       
     ]
     # example (b' that', 23033864) -> ([b" ", b"t", b"h", b"a", b"t"], 23033864)
 
-    curr_num_merges = 0
-    while len(vocab) < vocab_size and curr_num_merges <= num_merges:
-        curr_num_merges += 1
+    for _ in range (num_merges):
         pair_counts = Counter()
 
         for seq, seq_count in sequence_list:
@@ -75,12 +69,26 @@ def train_bpe(
         if not pair_counts: 
             break 
         
-        # get the first most common pairs 
-        (sym_a,sym_b), _ = pair_counts.most_common(1)[0] # return n list of (element, count) pairs sorted by count descending
+        # # get the first most common pairs 
+        # (sym_a,sym_b), _ = pair_counts.most_common(1)[0] # return n list of (element, count) pairs sorted by count descending
+        # We have to deal with tie count for pairs and having a deterministic rule to choose
+        # we can either use min or max for this 
+        # (sym_a,sym_b), _ = min(
+        #     pair_counts.items(), # all (pairs, counts)
+        #     key = lambda kv: (-kv[1],kv[0]) # picking the smallest key value with min()
+        #     # find highest count, with (-)-> -higher value = smaller negativer value
+        #     # if tie, pick by dictionary order smallest pair
+        #     )
+        # this solution passed for the test, i think the reference function used max count then lexicograpihcally largest pair
+        (sym_a, sym_b), _ = max(
+            pair_counts.items(),
+            key= lambda kv : (kv[1],kv[0])
+        )
 
 
         new_bytes = sym_a + sym_b
         new_id = len(vocab)
+        
         if new_bytes in token_to_id:
             continue
 
@@ -88,22 +96,15 @@ def train_bpe(
         token_to_id[new_bytes] = new_id
         merge_history.append((sym_a,sym_b))
 
-        sequence_list = [_update_sequence_list(seq, sym_a, sym_b) for seq in sequence_list]
+        sequence_list = [(_update_sequence_list(seq, sym_a, sym_b),count) for seq, count in sequence_list]
         
-
     print("final vocab size:", len(vocab))
     print("Total merges performed:", len(merge_history))
-
+    # print("100 first tokens after 256", [vocab[i] for i in range(256,366)])
     return (vocab, merge_history)
 
 
-def pair_counts():
-
-    return
-    # inverse_vocab : dict[bytes, int] = {} # easier to retrieve information
-
-
-def main():
+def main():  
     dataset = "tinystories_val.txt"
     num_processes = os.cpu_count() - 1 
     print("num_process:", num_processes)
@@ -111,6 +112,7 @@ def main():
     data_path = os.path.join(HERE, "..", "data", dataset)
     base_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     special_tokens= ["<|endoftext|>"]    
+
     counts = count_pretokens_parallel(
         data_path=data_path,
         num_processes=num_processes,
@@ -123,4 +125,25 @@ def main():
 
 
 if __name__ == "__main__":
+    import cProfile
+    import pstats 
+    pr = cProfile.Profile()
+    pr.enable()
     main()
+    pr.disable()
+    result = pstats.Stats(pr)
+    result.sort_stats(pstats.SortKey.TIME)
+    result.print_stats(20)
+
+    """
+    num_process: 13
+    Base vocabulary size: 257
+    final vocab size: 18000
+    Total merges performed: 17743
+    1 944 283 416 function calls in 279.721 seconds
+    as predicted, updating sequence length is taking the most time
+    232628473  116.355    0.000  172.455    0.000 basic/train_bpe_baseline.py:12(_update_sequence_list)
+    
+    -> should use in-place method 
+    """
+    

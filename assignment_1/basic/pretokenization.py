@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 from typing import BinaryIO, Sequence
-import pretokenizer_baseline, pretokenizer 
+from . import pretokenizer_baseline, pretokenizer 
 from collections import Counter
 import multiprocessing as mp
 from regex import Pattern
