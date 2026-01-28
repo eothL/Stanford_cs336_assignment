@@ -19,7 +19,7 @@ def _update_sequence_list(seq: list[bytes],sym_a: bytes, sym_b:bytes):
 def _most_common_pairs(
         pair_counts:Counter[tuple[bytes,bytes]],
         Ranking_criteria= lambda kv:(kv[1],kv[0])
-)-> tuple[(bytes,bytes),int]:
+)-> tuple[tuple[bytes,bytes],int]:
     """Return the most common pair of bytes based on the ranking criterion : (counts, bytes value if tie)"""
         # # get the first most common pairs 
         # (sym_a,sym_b), _ = pair_counts.most_common(1)[0] # return n list of (element, count) pairs sorted by count descending
@@ -36,7 +36,7 @@ def _most_common_pairs(
 
 
 def _get_pairs_counts(
-        sequence_list:list[list[bytes],int]
+        sequence_list:list[tuple[list[bytes],int]]
 )->Counter[tuple[bytes,bytes],int]:
     """Return a dict of pairs of tuple and theirs frequencies"""
     pair_counts = Counter()
@@ -96,7 +96,7 @@ def train_bpe(
         if not pair_counts: 
             break 
         
-        (sym_a, sym_b), _ = _most_common_pairs(pair_counts)
+        (sym_a, sym_b), _ = _most_common_pairs(pair_counts, Ranking_criteria=lambda kv: (kv[1],kv[0]))
 
         new_bytes = sym_a + sym_b
         new_id = len(vocab)

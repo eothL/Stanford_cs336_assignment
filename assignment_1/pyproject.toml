@@ -1,0 +1,29 @@
+[project]
+name = "assignment_1"
+version = "0.1.0"
+description = "Stanford assignment 1"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=9.0.2",
+]
+
+[dependency-groups]
+dev = [
+    "jaxtyping>=0.3.6",
+    "numpy>=2.4.1",
+    "pytest",
+    "regex>=2026.1.15",
+    "torch>=2.10.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+addopts = "-q"
+
+[tool.setuptools]
+packages = ["basic", "local"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
