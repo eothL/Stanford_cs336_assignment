@@ -109,22 +109,13 @@ def _apply_merge_to_sequences(
 
     return changed
 
-# --- heap solution to find the best pair ---
-def heap_comparator(a, b):
-    pair_a, count_a = a
-    pair_b, count_b = b
-
-    if count_a != count_b:
-        return count_a > count_b
-    else:
-        return pair_a > pair_b # lexicographically larger pair
-    
+# --- heap solution to find the best pair instead of the max function ---    
 def push(x, heap):
     heap.append(x)
     i = len(heap) - 1
     while i > 0:
         p = (i - 1) // 2
-        if heap_comparator(heap[i], heap[p]):
+        if heap[i] > heap[p]:
             heap[i], heap[p] = heap[p], heap[i]
             i = p
         else: 
@@ -144,8 +135,8 @@ def sift_down(heap, i):
         l = 2*i + 1
         r = 2*i + 2
         best = i
-        if l < n and heap_comparator(heap[l],heap[best]): best = l
-        if r < n and heap_comparator(heap[r],heap[best]): best = r
+        if l < n and heap[l] > heap[best]: best = l
+        if r < n and heap[r] > heap[best]: best = r
         if best == i: break
         heap[i], heap[best] = heap[best], heap[i]
         i = best 
@@ -155,7 +146,7 @@ def _select_best_pair_heap(
     pair_counts   
 ):
     while heap:
-        pair, count = heap[0]
+        count, pair = heap[0]
         current = pair_counts.get(pair,0)
         if current == count:
             return pair 
@@ -200,7 +191,7 @@ def _update_pair_stats_for_word_heap(
     for pair in touched_pairs:
         count = pair_counts.get(pair, 0)
         if count > 0:
-            push((pair, count), heap)
+            push((count, pair), heap)
 
 def _apply_merge_to_sequences_heap(
     pair_counts: Counter[tuple[bytes, bytes]],
@@ -349,7 +340,7 @@ def train_bpe_heap(
     ]
 
     pair_counts, pair_to_word_ids = _build_pair_stats(sequences)
-    heap = [(pair, count) for pair, count in pair_counts.items()]
+    heap = [(count, pair) for pair, count in pair_counts.items()]
     heapify(heap)
 
     for _ in range (num_merges):
@@ -403,7 +394,7 @@ def main():
         split_special_token=special_tokens[0]
         )
     
-    train_bpe(counts,special_tokens)
+    train_bpe_heap(counts,special_tokens)
 
 
 if __name__ == "__main__":
@@ -489,6 +480,24 @@ if __name__ == "__main__":
     final vocab size: 18017
     Total merges performed: 17760
     17506704 function calls (17506286 primitive calls) in 3.335 seconds
+
+    # dropping the custom heap_comparator to directly compare it heap[a] > heap[b]:
+    Dataset used: tinystories_val.txt
+    num_process: 13
+    Base vocabulary size: 257
+    final vocab size: 18017
+    Total merges performed: 17760
+         6013364 function calls (6012956 primitive calls) in 2.101 seconds
+
+   Ordered by: internal time
+   List reduced from 877 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   358167    0.786    0.000    0.797    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:132(sift_down)
+    77466    0.319    0.000    0.591    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:161(_update_pair_stats_for_word_heap)
+       37    0.246    0.007    0.246    0.007 {built-in method posix.read}
+   356774    0.107    0.000    0.135    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:113(push)
+    17760    0.084    0.000    1.004    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:144(_select_best_pair_heap)
     #--------------------    train validation set ---------------------
 
     Dataset used: tinystories_train.txt
@@ -574,3 +583,30 @@ if __name__ == "__main__":
     """
     
     
+"""
+Appendix : old code
+
+this function is dropped as we can directly compare heap[a] > heap[b] 
+Python’s tuple ordering is deterministic and fixed, implemented in C.
+
+  Rule: tuples are compared lexicographically (left‑to‑right).
+
+  So for (a1, a2, a3) and (b1, b2, b3):
+
+  1. compare a1 vs b1
+  2. if different → that decides
+  3. if equal → compare a2 vs b2, and so on
+
+def heap_comparator(a, b):
+    pair_a, count_a = a
+    pair_b, count_b = b
+
+    if count_a != count_b:
+        return count_a > count_b
+    else:
+        return pair_a > pair_b # lexicographically larger pair
+
+> lexicographically larger 
+< lexicographically smaller and use -counts 
+
+"""

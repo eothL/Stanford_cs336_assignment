@@ -602,6 +602,6 @@ def run_train_bpe(
         special_tokens =special_tokens,
         split_special_token = special_tokens[0]
     )
-    vocab, merges = train_bpe.train_bpe(counts=counts,special_tokens=special_tokens,vocab_size=vocab_size,**kwargs)
+    vocab, merges = train_bpe.train_bpe_heap(counts=counts,special_tokens=special_tokens,vocab_size=vocab_size,**kwargs)
     print(merges[620:640])
     return vocab, merges
