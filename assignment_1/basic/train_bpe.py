@@ -141,17 +141,23 @@ def sift_down(heap, i):
         heap[i], heap[best] = heap[best], heap[i]
         i = best 
 
-def _select_best_pair_heap(
-    heap,
-    pair_counts   
-):
+def _select_best_pair_heap(heap,pair_counts,stale_pops):
+    """Return the root of heap representing and rebuild the heap when there is too much stale node """
     while heap:
         count, pair = heap[0]
-        current = pair_counts.get(pair,0)
-        if current == count:
-            return pair 
-        pop_top(heap) # clean the heap from stale value 
-    return None
+        current = pair_counts.get(pair,0) 
+        if current == count: # make sure it is best pair in counting
+            return pair, stale_pops
+        
+        pop_top(heap) # clean the heap from stale node 
+        stale_pops += 1
+
+        if stale_pops > len(heap): #  rebuild the heap, too much stale pair
+            heap[:] = [(c, p) for p, c in pair_counts.items()] # heap[:] instead of heap to have in-place replace
+            heapify(heap)
+            stale_pops = 0
+
+    return None,stale_pops
     
 def heapify(heap):
     n = len(heap)
@@ -342,12 +348,17 @@ def train_bpe_heap(
     pair_counts, pair_to_word_ids = _build_pair_stats(sequences)
     heap = [(count, pair) for pair, count in pair_counts.items()]
     heapify(heap)
+    stale_pops = 0
 
+    
     for _ in range (num_merges):
         if not pair_counts: 
             break 
         
-        pair = _select_best_pair_heap(heap, pair_counts)
+        pair, stale_pops = _select_best_pair_heap(heap, pair_counts, stale_pops)
+
+        if not heap:
+            break 
         if not pair:
             break
         new_bytes = pair[0] + pair[1]
@@ -498,6 +509,24 @@ if __name__ == "__main__":
        37    0.246    0.007    0.246    0.007 {built-in method posix.read}
    356774    0.107    0.000    0.135    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:113(push)
     17760    0.084    0.000    1.004    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:144(_select_best_pair_heap)
+    
+    # rebuilding heap after accumulating too much stale -> can be huge on large corpus
+    Dataset used: tinystories_val.txt
+    num_process: 13
+    Base vocabulary size: 257
+    final vocab size: 18017
+    Total merges performed: 17760
+    5437154 function calls (5436736 primitive calls) in 1.623 seconds
+
+   Ordered by: internal time
+   List reduced from 879 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   214138    0.416    0.000    0.423    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:132(sift_down)
+    77466    0.301    0.000    0.550    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:167(_update_pair_stats_for_word_heap)
+    41/37    0.255    0.006    0.255    0.007 {built-in method posix.read}
+   356774    0.100    0.000    0.127    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:113(push)
+    17760    0.070    0.000    0.566    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:144(_select_best_pair_heap)
     #--------------------    train validation set ---------------------
 
     Dataset used: tinystories_train.txt
