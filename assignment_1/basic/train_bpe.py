@@ -352,7 +352,7 @@ def train_bpe_heap(
     heap = [(pair, count) for pair, count in pair_counts.items()]
     heapify(heap)
 
-    for merge_i in range (num_merges):
+    for _ in range (num_merges):
         if not pair_counts: 
             break 
         
@@ -385,7 +385,6 @@ def train_bpe_heap(
 def main():  
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="tinystories_val.txt")
-    parser.add_argument("--BestPairFilter", default= "max function") # function used to get the best_pairs
     args = parser.parse_args()
     dataset =  args.dataset
     print("Dataset used:",dataset)
@@ -404,7 +403,7 @@ def main():
         split_special_token=special_tokens[0]
         )
     
-    train_bpe_heap(counts,special_tokens)
+    train_bpe(counts,special_tokens)
 
 
 if __name__ == "__main__":
@@ -538,6 +537,40 @@ if __name__ == "__main__":
  65204684    5.452    0.000    5.452    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:113(heap_comparator)
    348242    2.005    0.000    4.081    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:170(_update_pair_stats_for_word_heap)
   1818552    0.857    0.000    1.284    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:122(push)
+    
+    # ------ result on Openwebtext_val.txt -------
+    Dataset used: openwebtext_val.txt
+    num_process: 13
+    Base vocabulary size: 257
+    final vocab size: 50307
+    Total merges performed: 50050
+    1354086502 function calls (1354086077 primitive calls) in 327.004 seconds
+
+   Ordered by: internal time
+   List reduced from 894 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+ 21491995  145.970    0.000  233.972    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:141(sift_down)
+967653590   91.055    0.000   91.055    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:113(heap_comparator)
+  3484551   32.380    0.000   61.747    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:170(_update_pair_stats_for_word_heap)
+ 25449094   12.376    0.000   18.186    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:122(push)
+ 69526156    7.197    0.000    7.197    0.000 {method 'get' of 'dict' objects}
+ 21486070    6.384    0.000  241.254    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:133(pop_top)
+    50050    6.176    0.000  249.991    0.005 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:153(_select_best_pair_heap)
+  3484551    4.681    0.000    7.346    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:37(_merge_pair_in_seq)
+ 59653756    4.116    0.000    4.116    0.000 {method 'add' of 'set' objects}
+91930188/91930180    3.121    0.000    3.121    0.000 {built-in method builtins.len}
+ 20488935    2.921    0.000    2.921    0.000 {method 'discard' of 'set' objects}
+    50050    2.590    0.000   71.710    0.001 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:205(_apply_merge_to_sequences_heap)
+ 46226778    2.312    0.000    2.312    0.000 {method 'append' of 'list' objects}
+  387/383    1.959    0.005    4.068    0.011 {built-in method posix.read}
+ 21486119    0.900    0.000    0.900    0.000 {method 'pop' of 'list' objects}
+        1    0.884    0.884    1.341    1.341 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:15(_build_pair_stats)
+        1    0.816    0.816  327.004  327.004 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:385(main)
+        1    0.573    0.573  323.629  323.629 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:313(train_bpe_heap)
+       28    0.175    0.006    0.385    0.014 /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/collections/__init__.py:679(update)
+   643676    0.153    0.000    0.153    0.000 {method 'pop' of 'dict' objects}
+    
     """
     
     

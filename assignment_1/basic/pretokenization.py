@@ -6,6 +6,7 @@ from collections import Counter
 import multiprocessing as mp
 from regex import Pattern
 from typing import BinaryIO
+import argparse
 
 def _align_utf8_boundary(file: BinaryIO, pos: int) ->int:
     """prevent from landing in the middle of a multi-byte character"""
@@ -85,7 +86,7 @@ def _count_chunck(
         end: int,
         PAT: Pattern,
         split_special_token: str | None, 
-)-> Counter:
+)-> Counter[str]:
     """worker function for multiprocessing return a pretokenize of a chunck"""
     with open(data_path, "rb") as f:
         f.seek(start)
@@ -102,7 +103,7 @@ def _count_chunck(
         else:
             counts_str = pretokenizer.pretokenize_string_count(PAT=PAT, text=chunk)
 
-    return pretokenizer.encoding_pretokenizer_counts(counts_str) # encode in utf-8
+    return counts_str 
 
 def count_pretokens_parallel(
         data_path: str,
@@ -135,7 +136,7 @@ def count_pretokens_parallel(
     tasks = [(data_path, s, e, PAT, split_tok) for s, e in zip(boundaries[:-1], boundaries[1:])]
 
     with mp.Pool(processes=num_processes) as pool:
-        counters = pool.starmap(_count_chunck, tasks, chunksize=1) # keep chunk size to one, increasing it reduce performance
+        counters = pool.starmap(_count_chunck, tasks, chunksize=1) # keep chunk size (batch size send to workers) to one, increasing it can reduce performance
 
 
     counts = Counter()
@@ -148,11 +149,16 @@ def count_pretokens_parallel(
         print("total_pretokens:", total)
         print("unique_pretokens:", len(counts))
         print("top10:", counts.most_common(10))
-    return counts
+    return pretokenizer.encoding_pretokenizer_counts(counts) #encode in utf-8
  
 def main_parallel():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", default="tinystories_val.txt")
+    args = parser.parse_args()
+    dataset = args.dataset
+    print("dataset:",dataset)
     HERE = os.path.dirname(os.path.abspath(__file__))
-    data_path = os.path.join(HERE, "..", "data","openwebtext_train.txt")
+    data_path = os.path.join(HERE, "..", "data",dataset)
     
     num_processes = os.cpu_count() - 1 
     print("num_process:", num_processes)
@@ -215,7 +221,7 @@ if __name__ == "__main__":
     total_pretokens: 2475971866
     unique_pretokens: 6605727
     
-    and 92.04 s with 22 157 501 function calls we have more called function but improved in time
+    and by encoding at the end 92.04 s with 22 157 501 function calls we have more called function but improved in time
     6605742    0.402    0.000    0.402    0.000 {method 'encode' of 'str' objects}
 
     training set of tinystories 
