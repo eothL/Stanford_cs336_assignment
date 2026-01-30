@@ -33,18 +33,6 @@ def _select_best_pair(
 ) -> tuple[tuple[bytes, bytes], int]:
     """return the most common pair based on the count and bytes value if there is a tie for the count"""
     return max(pair_counts.items(), key=lambda kv: (kv[1], kv[0])) # compare count then bytes value
-
-def _select_best_pair_heap(
-    heap,
-    pair_counts,
-):
-    while heap:
-        count, pair = heap[0]
-        current = pair_counts.get(pair, 0)
-        if current == count and current > 0:
-            return pair
-        pop_top(heap)
-    return None
     
 def _merge_pair_in_seq(
     seq: list[bytes],
@@ -143,7 +131,7 @@ def push(x, heap):
             break
 
 def pop_top(heap):
-    if not heap : return None
+    if not heap : return None # if heap is empty return None
     top = heap[0]
     heap[0] = heap[-1]
     heap.pop()
@@ -171,7 +159,7 @@ def _select_best_pair_heap(
         current = pair_counts.get(pair,0)
         if current == count:
             return pair 
-        pop_top(heap)
+        pop_top(heap) # clean the heap from stale value 
     return None
     
 def heapify(heap):
@@ -212,7 +200,7 @@ def _update_pair_stats_for_word_heap(
     for pair in touched_pairs:
         count = pair_counts.get(pair, 0)
         if count > 0:
-            push((count, pair), heap)
+            push((pair, count), heap)
 
 def _apply_merge_to_sequences_heap(
     pair_counts: Counter[tuple[bytes, bytes]],
@@ -361,10 +349,10 @@ def train_bpe_heap(
     ]
 
     pair_counts, pair_to_word_ids = _build_pair_stats(sequences)
-    heap = [(count, pair) for pair, count in pair_counts.items()]
+    heap = [(pair, count) for pair, count in pair_counts.items()]
     heapify(heap)
 
-    for _ in range (num_merges):
+    for merge_i in range (num_merges):
         if not pair_counts: 
             break 
         
@@ -397,10 +385,11 @@ def train_bpe_heap(
 def main():  
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="tinystories_val.txt")
+    parser.add_argument("--BestPairFilter", default= "max function") # function used to get the best_pairs
     args = parser.parse_args()
     dataset =  args.dataset
     print("Dataset used:",dataset)
-    num_processes = os.cpu_count() - 1 
+    num_processes = (os.cpu_count() - 1) 
     print("num_process:", num_processes)
     HERE = os.path.dirname(os.path.abspath(__file__))
     data_path = os.path.join(HERE, "..", "data", dataset)
@@ -495,6 +484,12 @@ if __name__ == "__main__":
   1118137    0.095    0.000    0.095    0.000 {method 'get' of 'dict' objects}
     on the tinystories_train.txt, we are at 14.8s
 
+    # modification on _count_chunk : split on special token first and then apply regex on each piece separately 
+    num_process: 13
+    Base vocabulary size: 257
+    final vocab size: 18017
+    Total merges performed: 17760
+    17506704 function calls (17506286 primitive calls) in 3.335 seconds
     #--------------------    train validation set ---------------------
 
     Dataset used: tinystories_train.txt

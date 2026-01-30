@@ -1,12 +1,33 @@
 from __future__ import annotations
 import os
 from typing import BinaryIO, Sequence
-from . import pretokenizer_baseline, pretokenizer 
+from . import pretokenizer_baseline, pretokenizer
 from collections import Counter
 import multiprocessing as mp
 from regex import Pattern
+from typing import BinaryIO
 
+def _align_utf8_boundary(file: BinaryIO, pos: int) ->int:
+    """prevent from landing in the middle of a multi-byte character"""
 
+    # edge cases
+    if pos <= 0:
+        return 0
+    file.seek(0, os.SEEK_END)
+    file_size = file.tell()
+    if pos >= file_size:
+        return file_size
+    
+    # Move backward while we're on a continuation byte
+    while pos > 0: #pos start of the next chunk
+        file.seek(pos)
+        b = file.read(1) # first byte of the next chunk
+        if not b: # stop the loop if b is nothing 
+            break
+        if (b[0] & 0b11000000) !=  0b10000000: 
+            break
+        pos -=1
+    return pos
 
 def find_chunk_boundaries(
     file: BinaryIO,
@@ -31,6 +52,7 @@ def find_chunk_boundaries(
     chunk_boundaries[-1] = file_size
 
     mini_chunk_size = 4096  # Read ahead by 4k bytes at a time
+    token_len = len(split_special_token)
 
     for bi in range(1, len(chunk_boundaries) - 1):
         initial_position = chunk_boundaries[bi]
@@ -46,7 +68,10 @@ def find_chunk_boundaries(
             # Find the special token in the mini chunk
             found_at = mini_chunk.find(split_special_token)
             if found_at != -1:
-                chunk_boundaries[bi] = initial_position + found_at
+                boundary = initial_position + found_at + token_len
+                if boundary > file_size:
+                    boundary = file_size
+                chunk_boundaries[bi] = _align_utf8_boundary(file, boundary)
                 break
             initial_position += mini_chunk_size
 
@@ -59,13 +84,25 @@ def _count_chunck(
         start: int,
         end: int,
         PAT: Pattern,
+        split_special_token: str | None, 
 )-> Counter:
     """worker function for multiprocessing return a pretokenize of a chunck"""
     with open(data_path, "rb") as f:
         f.seek(start)
-        chunk = f.read(end - start).decode("utf-8",errors="ignore")
-        counts = pretokenizer.pretokenize_string_count(PAT=PAT,text=chunk)
-    return counts
+        chunk = f.read(end - start).decode("utf-8", errors="ignore")
+
+        if split_special_token:
+            # split the text on special token 
+            parts = chunk.split(split_special_token)
+            counts_str = Counter()
+            for part in parts:
+                counts_str.update(pretokenizer.pretokenize_string_count(PAT=PAT, text=part))
+            if len(parts) > 1: 
+                counts_str[split_special_token] += len(parts) - 1
+        else:
+            counts_str = pretokenizer.pretokenize_string_count(PAT=PAT, text=chunk)
+
+    return pretokenizer.encoding_pretokenizer_counts(counts_str) # encode in utf-8
 
 def count_pretokens_parallel(
         data_path: str,
@@ -89,20 +126,22 @@ def count_pretokens_parallel(
                 split_special_token.encode("utf-8")
                 )
 
-    PAT = pretokenizer.compile_pattern(base_pattern,special_tokens)
+    # we keep special token in the pattern that are not used for splitting text 
+    not_split_special_token = [t for t in special_tokens if t!= split_special_token]
+    # Compile pattern without split_special_token; we split on them explicitly.
+    PAT = pretokenizer.compile_pattern(base_pattern, not_split_special_token)
 
-    tasks = [(data_path, s, e, PAT) for s, e in zip(boundaries[:-1], boundaries[1:])]
+    split_tok = split_special_token if special_tokens else None
+    tasks = [(data_path, s, e, PAT, split_tok) for s, e in zip(boundaries[:-1], boundaries[1:])]
 
     with mp.Pool(processes=num_processes) as pool:
         counters = pool.starmap(_count_chunck, tasks, chunksize=1) # keep chunk size to one, increasing it reduce performance
 
 
-    counts_string = Counter()
+    counts = Counter()
     for c in counters:
-        counts_string.update(c)
+        counts.update(c)
     
-    counts = pretokenizer.encoding_pretokenizer_counts(counts_string)
-
     if debug:
         total = sum(counts.values())
         print("data_path:", os.path.abspath(data_path))
@@ -215,6 +254,3 @@ if __name__ == "__main__":
     it may be due to the fact that compiled regex object are pickleable
     """
         
-
-
-

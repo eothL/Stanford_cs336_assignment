@@ -20,7 +20,7 @@ def pretokenize(
     return counts
 
 # --------------- Others solutions --------------
-# Encoding at the end instead at each step
+# Encoding at the end instead at each step -> best solution so far compare to other one
 def pretokenize_string_count(
         PAT:re.Pattern,
         text:str,
