@@ -24,9 +24,9 @@ def _align_utf8_boundary(file: BinaryIO, pos: int) ->int:
         b = file.read(1) # first byte of the next chunk
         if not b: # stop the loop if b is nothing 
             break
-        if (b[0] & 0b11000000) !=  0b10000000: 
+        if (b[0] & 0b11000000) !=  0b10000000: # checking if there is 10 as the first two bytes signaling a non continuation byte as it start with 10xxxxxx
             break
-        pos -=1
+        pos -=1 # going to the previous bytes
     return pos
 
 def find_chunk_boundaries(
