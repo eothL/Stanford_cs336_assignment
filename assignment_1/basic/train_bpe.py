@@ -170,12 +170,14 @@ def heapify(heap):
 def _update_pair_stats_for_word_heap(
     pair_counts: Counter[tuple[bytes, bytes]],
     pair_to_word_ids: defaultdict[tuple[bytes, bytes], set[int]],
-    heap,
+    heap :list[tuple[int, tuple[bytes,bytes]]], # [(count, pair)]
     old_seq: list[bytes],
     new_seq: list[bytes],
     word_count: int,
     word_id: int,
 ) -> None:
+    """Update only the concerned word in the dict pair_counts and pair_to_ids based on the merges"""
+    # keep track of all unique paired changed by merging to prevent from scanning the whole pair_counts when there is a need to update the heap 
     touched_pairs: set[tuple[bytes, bytes]] = set()
     for sym_a, sym_b in zip(old_seq, old_seq[1:]):
         old_pair = (sym_a, sym_b)
@@ -206,10 +208,11 @@ def _apply_merge_to_sequences_heap(
     pair_counts: Counter[tuple[bytes, bytes]],
     pair_to_word_ids: defaultdict[tuple[bytes, bytes], set[int]],
     sequences: list[tuple[list[bytes], int]],
-    heap,
+    heap: list[tuple[int, tuple[bytes,bytes]]],
     pair: tuple[bytes, bytes],
     new_bytes: bytes,
 ) -> bool:
+    """Return a bool if the selected pairs of bytes is new and update the word"""
     word_ids = list(pair_to_word_ids.get(pair, ()))
     if not word_ids:
         pair_counts.pop(pair, None)
@@ -231,7 +234,7 @@ def _apply_merge_to_sequences_heap(
                 word_count=word_count,
                 word_id=word_id,
             )
-            sequences[word_id] = (new_seq, word_count)
+            sequences[word_id] = (new_seq, word_count) # Apply the new bytes merges in the word in sequences 
             changed = True
 
     return changed
