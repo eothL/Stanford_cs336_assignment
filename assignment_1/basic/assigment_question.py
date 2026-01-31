@@ -10,6 +10,8 @@ import os
 import cProfile 
 import pstats
 import argparse
+import time 
+import tracemalloc
 
 """train bpe tokenizer on the TinyStories dataset using vocab size of 10 000"""
 
@@ -42,6 +44,10 @@ def run_train_bpe(
     """
     num_processes = os.cpu_count() - 1
     base_pattern = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    print("-"*25,"Pretokenization", "-"*25)
+
+    pretoken_start = time.perf_counter() # time 
+    tracemalloc.start() # memory taken
     counts = count_pretokens_parallel(
         data_path=input_path,
         num_processes=num_processes,
@@ -49,48 +55,69 @@ def run_train_bpe(
         special_tokens =special_tokens,
         split_special_token = special_tokens[0]
     )
+    current,peak = tracemalloc.get_traceback_memory() # return bytes to convert in GB -> N bytes * 1024 (KiB) * 1024 (MiB) * 1024 (GiB)
+    tracemalloc.stop()
+    pretoken_end = time.perf_counter()
+
+    elapsed_s = pretoken_end-pretoken_start
+    print(f"Pretokenizer took {elapsed_s/60} min")
+    print(f"Memory taken currently {current/(1024**3)} GB with a pick at {peak/1024**3} GB") 
+
+    
+    print("-"*25,"BPE Algorithm", "-"*25)
+    bpe_start = time.perf_counter()
+    tracemalloc.start() # memory taken
     vocab, merges = train_bpe_heap(counts=counts,special_tokens=special_tokens,vocab_size=vocab_size,**kwargs)
+    bpe_end = time.perf_counter()
+    current,peak = tracemalloc.get_traceback_memory() # return bytes to convert in GB -> N bytes * 1024 (KiB) * 1024 (MiB) * 1024 (GiB)
+    tracemalloc.stop()
+    elapsed_bpe_s = bpe_end - bpe_start
+    print(f"BPE took {elapsed_bpe_s/60} min")
+    print(f"Memory taken currently {current/(1024**3)} GB with a pick at {peak/1024**3} GB") 
+    
     return vocab, merges
 
 def save_vocab_merges(vocab, merges, vocab_path, merges_vocab):
+
     return
 
 def train_bpe_tinystories(data_folder_path, vocab_size, special_tokens):
     """return answer from a and b for tinystories"""
     dataset = "tinystories_train.txt"
     data_path = os.path.join(data_folder_path, dataset)
+
+    print("*"*25,f"Start training tokenizer on {dataset} datset", "*"*25)   
     pr_ts = cProfile.Profile()
     pr_ts.enable()
     vocab, merges = run_train_bpe(data_path,vocab_size,special_tokens)
     pr_ts.disable()
-    # hours + memory took
+    # memory took
 
     # longest token
-    print("longest token in vocab:", max(vocab,key=lambda x: len(x[1])))
+    print("longest token in vocab:", max(vocab.values,key= len))
 
 
     print("*"*25,"result on Tinystories datset", "*"*25)
     result_ts = pstats.Stats(pr_ts)
     result_ts.sort_stats(pstats.SortKey.TIME)
     result_ts.print_stats(10)
+
+    print("-"*25,"Analysis of the profile", "-"*25)
+    print("""Updating the heap and pair_counts is taking most of the time in the tokenizer process""")
     return vocab, merges
 
 
 def main():
     special_tokens= ["<|endoftext|>"]    
-
+    saving_path = "artifacts"
     HERE = os.path.dirname(os.path.abspath(__file__))
     DATA_FOLDER = "data"
     data_folder_path = os.path.join(HERE, "..", DATA_FOLDER)
+    print("="*25,"Start training tokenizer", "="*25)   
+
     train_bpe_tinystories(data_folder_path,vocab_size=10000,special_tokens=special_tokens)
     train_bpe_owt(data_folder_path,vocab_size=32000,special_tokens=special_tokens)
     return 
 
 if __name__== "__main__":
-    pr = cProfile.Profile()
-    pr.enable()
     main()
-    pr.disable
-    result = pstats.Stats(pr)
-    result.sort_stats(pstats.SortKey.TIME)
-    result.print_stats(20)
