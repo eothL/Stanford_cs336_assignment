@@ -4,6 +4,9 @@ from collections import Counter, defaultdict
 import argparse
 import os
 
+# we could use the library heapq
+# import heapq
+# to use heapq.heappush, heapq.heappop and heapq.heapify
 
 def get_compression_rate(vocab: dict[int, bytes], text: str) -> float:
     number_bytes = len(bytes(text, encoding="utf-8"))
@@ -357,9 +360,7 @@ def train_bpe_heap(
         
         pair, stale_pops = _select_best_pair_heap(heap, pair_counts, stale_pops)
 
-        if not heap:
-            break 
-        if not pair:
+        if pair is None: # heap emptied
             break
         new_bytes = pair[0] + pair[1]
 
