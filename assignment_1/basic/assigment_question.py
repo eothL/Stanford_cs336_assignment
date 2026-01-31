@@ -1,9 +1,16 @@
 # this file is to answer question from the assignment 1 pdf file
-import .train_bpe 
+from __future__ import annotations
+
+from .train_bpe import train_bpe_heap
 from .pretokenization import count_pretokens_parallel
+
+import json 
+from pathlib import Path
 import os 
 import cProfile 
 import pstats
+import argparse
+
 """train bpe tokenizer on the TinyStories dataset using vocab size of 10 000"""
 
 def run_train_bpe(
@@ -42,14 +49,48 @@ def run_train_bpe(
         special_tokens =special_tokens,
         split_special_token = special_tokens[0]
     )
-    vocab, merges = train_bpe.train_bpe_heap(counts=counts,special_tokens=special_tokens,vocab_size=vocab_size,**kwargs)
-    # print(merges[620:640])
+    vocab, merges = train_bpe_heap(counts=counts,special_tokens=special_tokens,vocab_size=vocab_size,**kwargs)
     return vocab, merges
 
+def save_vocab_merges(vocab, merges, vocab_path, merges_vocab):
+    return
+
+def train_bpe_tinystories(data_folder_path, vocab_size, special_tokens):
+    """return answer from a and b for tinystories"""
+    dataset = "tinystories_train.txt"
+    data_path = os.path.join(data_folder_path, dataset)
+    pr_ts = cProfile.Profile()
+    pr_ts.enable()
+    vocab, merges = run_train_bpe(data_path,vocab_size,special_tokens)
+    pr_ts.disable()
+    # hours + memory took
+
+    # longest token
+    print("longest token in vocab:", max(vocab,key=lambda x: len(x[1])))
+
+
+    print("*"*25,"result on Tinystories datset", "*"*25)
+    result_ts = pstats.Stats(pr_ts)
+    result_ts.sort_stats(pstats.SortKey.TIME)
+    result_ts.print_stats(10)
+    return vocab, merges
+
+
 def main():
+    special_tokens= ["<|endoftext|>"]    
+
+    HERE = os.path.dirname(os.path.abspath(__file__))
+    DATA_FOLDER = "data"
+    data_folder_path = os.path.join(HERE, "..", DATA_FOLDER)
+    train_bpe_tinystories(data_folder_path,vocab_size=10000,special_tokens=special_tokens)
+    train_bpe_owt(data_folder_path,vocab_size=32000,special_tokens=special_tokens)
     return 
 
 if __name__== "__main__":
     pr = cProfile.Profile()
     pr.enable()
-    run_train_bpe()
+    main()
+    pr.disable
+    result = pstats.Stats(pr)
+    result.sort_stats(pstats.SortKey.TIME)
+    result.print_stats(20)
