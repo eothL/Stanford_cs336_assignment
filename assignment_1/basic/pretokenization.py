@@ -218,8 +218,8 @@ if __name__ == "__main__":
     """
     on openwebtext_train.txt
     it takes 109 s with 15 588 502 called function
-    total_pretokens: 2475971866
     unique_pretokens: 6605727
+    total_pretokens: 2 475 971 866
     
     and by encoding at the end 92.04 s with 22 157 501 function calls we have more called function but improved in time
     6605742    0.402    0.000    0.402    0.000 {method 'encode' of 'str' objects}
@@ -231,8 +231,8 @@ if __name__ == "__main__":
 
     with encoding at the end we have 12.681 : crazy how simple solution makes huges differences
     407370 function calls
-    total_pretokens: 539 317 083
     unique_pretokens: 59 921
+    total_pretokens: 539 317 083
     and on the validation set : 0.247 s huge improvement lol, the bigger the corpus are the bigger impact
     116764 function calls 
 
