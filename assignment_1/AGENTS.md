@@ -2,6 +2,9 @@
 This project CS336 Assignment 1 (Basics) implements the core building blocks of modern
 transformer language models from scratch, including NN layers, attention mechanism, optimization algorithm, and tokenization. The assignment is structured around implementing various functions in the `adapters.py` file to pass comprehensive test suites. 
 
+Environment:
+- A dedicated env exists for the agent; prefer `python` (not `python3`) and use `uv` for package management.
+
 Key code:
 - tests/adapters.py: required functions (test targets).
 - basic/Tokenizer.py: tokenizer class (currently stubs).
