@@ -67,4 +67,3 @@ Remaining work (use ✅:done/🟡: currently doing/⏳: not started):
 - 🟡 Report training time + peak memory
 - 🟡 Identify longest token + comment if it makes sense
 - 🟡 Provide 1–2 sentence answer for profiling (part b)
-
