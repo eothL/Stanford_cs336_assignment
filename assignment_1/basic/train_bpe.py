@@ -388,7 +388,176 @@ def train_bpe_heap(
     # print("100 first tokens after 256", [vocab[i] for i in range(256,366)])
     return (vocab, merge_history)
 
-def main():  
+
+# USING HEAPQ INSTEAD OF CUSTOMIZED HEAP
+def train_bpe_heapq( counts: Counter[bytes],
+        special_tokens: list[str],
+        vocab_size: int = 50307, 
+    )-> tuple[dict[int,bytes],list[tuple[bytes,bytes]]]:
+    """ train a bpe tokeniser and return a mapping of id to their token"""
+    import heapq
+    def _rev_key(tok:bytes)-> tuple[int, ...]:
+        """Reverse lexicographic order + (1, fixes prefix ordering)"""
+        # all negated bytes are <= 0, 1 gaurant shorter prefix becomes larger in the reversed order
+        return tuple(-b for b in tok) + (1,)
+    def _update_pair_stats_for_word_heapq(
+        pair_counts: Counter[tuple[bytes, bytes]],
+        pair_to_word_ids: defaultdict[tuple[bytes, bytes], set[int]],
+        heap :list[tuple[int, tuple[int,...], tuple[int,...], tuple[bytes, bytes]]],
+        old_seq: list[bytes],
+        new_seq: list[bytes],
+        word_count: int,
+        word_id: int,
+        ) -> None:
+        """Update only the concerned word in the dict pair_counts and pair_to_ids based on the merges"""
+        # keep track of all unique paired changed by merging to prevent from scanning the whole pair_counts when there is a need to update the heap 
+        touched_pairs: set[tuple[bytes, bytes]] = set()
+        for sym_a, sym_b in zip(old_seq, old_seq[1:]):
+            old_pair = (sym_a, sym_b)
+            pair_counts[old_pair] -= word_count
+            if pair_counts[old_pair] <= 0:
+                pair_counts.pop(old_pair, None)
+                pair_to_word_ids.pop(old_pair, None)
+            else:
+                touched_pairs.add(old_pair)
+            word_ids = pair_to_word_ids.get(old_pair)
+            if word_ids:
+                word_ids.discard(word_id)
+                if not word_ids:
+                    pair_to_word_ids.pop(old_pair, None)
+
+        for sym_a, sym_b in zip(new_seq, new_seq[1:]):
+            new_pair = (sym_a, sym_b)
+            pair_counts[new_pair] += word_count
+            pair_to_word_ids[new_pair].add(word_id)
+            touched_pairs.add(new_pair)
+
+        for pair in touched_pairs:
+            count = pair_counts.get(pair, 0)
+            if count > 0:
+                heapq.heappush(heap, (-count, _rev_key(pair[0]), _rev_key(pair[1]), pair))
+
+    def _apply_merge_to_sequences_heapq(
+        pair_counts: Counter[tuple[bytes, bytes]],
+        pair_to_word_ids: defaultdict[tuple[bytes, bytes], set[int]],
+        sequences: list[tuple[list[bytes], int]],
+        heap: list[tuple[int, tuple[int,...], tuple[int,...], tuple[bytes, bytes]]],
+        pair: tuple[bytes, bytes],
+        new_bytes: bytes,
+        ) -> bool:
+        """Return a bool if the selected pairs of bytes is new and update the word"""
+        word_ids = list(pair_to_word_ids.get(pair, ()))
+        if not word_ids:
+            pair_counts.pop(pair, None)
+            pair_to_word_ids.pop(pair, None)
+            return False
+
+        sym_a, sym_b = pair
+        changed = False
+        for word_id in word_ids:
+            old_seq, word_count = sequences[word_id]
+            new_seq = _merge_pair_in_seq(old_seq, sym_a, sym_b, new_bytes)
+            if new_seq != old_seq:
+                _update_pair_stats_for_word_heapq(
+                    pair_counts=pair_counts,
+                    pair_to_word_ids=pair_to_word_ids,
+                    heap= heap,
+                    old_seq=old_seq,
+                    new_seq=new_seq,
+                    word_count=word_count,
+                    word_id=word_id,
+                )
+                sequences[word_id] = (new_seq, word_count) # Apply the new bytes merges in the word in sequences 
+                changed = True
+
+        return changed
+
+
+    vocab:dict[int,bytes] = {} # mapping of id to token 
+    token_to_id: dict[bytes,int] = {}  # mapping of token to id 
+    merge_history: list[tuple[bytes,bytes]] = []
+
+    # initialization for the number from 0 to 255
+    for id in range(256):
+        vocab[id] = bytes([id]) # don't forget the bracket otherwise we bytes of length id instead of converting 
+        token_to_id[bytes([id])] = id
+
+    # adding special token to the vocab 
+    for tok in special_tokens:
+        btok = tok.encode("utf-8")
+        token_to_id[btok] = len(vocab)
+        vocab[len(vocab)] = btok # stocking in binary
+
+    base_size = 256 + len(special_tokens)
+    assert vocab_size >= base_size
+    print("Base vocabulary size:", base_size)
+    num_merges = vocab_size - base_size
+
+    special_tokens_bytes = {t.encode("utf-8") for t in special_tokens}
+
+    sequences =[
+        (
+            [word] if word in special_tokens_bytes # keep intact special token
+            else [bytes([sym]) for sym in word],   # decompose word in a sequence of symbol
+            count                                  # frequence of the whole sequence in the corpus
+        )
+        for word, count in counts.items()       
+    ]
+
+    pair_counts, pair_to_word_ids = _build_pair_stats(sequences)
+    heap = [(-count, _rev_key(a),_rev_key(b) ,(a,b)) for (a,b), count in pair_counts.items()] # heapq use min-heap
+    heapq.heapify(heap)
+    stale_pops = 0
+
+    
+    for _ in range (num_merges):
+        if not pair_counts: 
+            break 
+        pair = None
+        while heap:
+            neg_count,_,_, pair =heap[0]
+            current = pair_counts.get(pair,0)
+            if -neg_count == current:
+                break
+
+            heapq.heappop(heap)
+            stale_pops += 1
+
+            if stale_pops > len(heap):
+                heap[:] = [(-count, _rev_key(a),_rev_key(b) ,(a,b)) for (a,b), count in pair_counts.items()]
+                heapq.heapify(heap)
+                stale_pops = 0
+
+        if pair is None: # heap emptied
+            break
+
+        new_bytes = pair[0] + pair[1]
+
+        if not _apply_merge_to_sequences_heapq(
+            pair_counts=pair_counts,
+            pair_to_word_ids=pair_to_word_ids,
+            sequences=sequences,
+            heap=heap,
+            pair=pair,
+            new_bytes=new_bytes,
+        ):
+            continue
+
+        if new_bytes not in token_to_id:
+            new_id = len(vocab)
+            vocab[new_id] = new_bytes
+            token_to_id[new_bytes] = new_id
+            merge_history.append(pair)
+
+    print("final vocab size:", len(vocab))
+    print("Total merges performed:", len(merge_history))
+    # print("100 first tokens after 256", [vocab[i] for i in range(256,366)])
+    return (vocab, merge_history)
+
+def main(): 
+    import cProfile
+    import pstats 
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="tinystories_val.txt")
     args = parser.parse_args()
@@ -408,20 +577,27 @@ def main():
         special_tokens=special_tokens,
         split_special_token=special_tokens[0]
         )
-    
-    train_bpe_heap(counts,special_tokens)
-
-
-if __name__ == "__main__":
-    import cProfile
-    import pstats 
     pr = cProfile.Profile()
+    print("="*25,"training using custom heap","="*25)
     pr.enable()
-    main()
+    train_bpe_heap(counts,special_tokens)
     pr.disable()
     result = pstats.Stats(pr)
     result.sort_stats(pstats.SortKey.TIME)
-    result.print_stats(20)
+    result.print_stats(20) 
+
+    pr = cProfile.Profile()
+    print("="*25,"training using heapq","="*25)
+    pr.enable()
+    train_bpe_heapq(counts, special_tokens)
+    pr.disable()
+    result = pstats.Stats(pr)
+    result.sort_stats(pstats.SortKey.TIME)
+    result.print_stats(20) 
+
+
+if __name__ == "__main__":
+    main()
 
     """
     num_process: 13
