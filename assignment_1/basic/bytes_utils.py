@@ -48,28 +48,32 @@ def gpt2_bytes_to_unicode() -> dict[int, str]:
             bs.append(b)
             cs.append(2**8 + n)
             n += 1
-    characters = [chr(n) for n in cs]
-    d = dict(zip(bs, characters))
+    characters = [chr(n) for n in cs] # actual printable chars
+    d = dict(zip(bs, characters)) # byte-int -> printable-char
     return d
 
 
 @lru_cache
 def gpt2_unicode_to_bytes() -> dict[str, int]:
+    """inverts the mapping from printable unicode character to original bytes value : go back from serialized text to a raw bytes"""
     byte_encoder = gpt2_bytes_to_unicode()
-    return {v: k for k, v in byte_encoder.items()}
+    return {v: k for k, v in byte_encoder.items()} #{character : int}
 
 
 def bytes_to_unicode_text(data: bytes) -> str:
+    """converts raw bytes into a printable unicode strin representation: b' hi\n' → 'ĠhiĊ'"""
     byte_encoder = gpt2_bytes_to_unicode()
     return "".join(byte_encoder[b] for b in data)
 
 
 def unicode_token_to_bytes(token: str) -> bytes:
+    """converts  a serialized token back into rawy bytes: ĠhiĊ → b' hi\n'"""
     byte_decoder = gpt2_unicode_to_bytes()
     return bytes(byte_decoder[ch] for ch in token)
 
 
 def unicode_counts_to_bytes(counts: Counter[str]) -> Counter[bytes]:
+    """converts unicode key to byte tokens: "Ġhi": 2 ->b" hi": 2 """
     byte_decoder = gpt2_unicode_to_bytes()
     return Counter({bytes(byte_decoder[ch] for ch in s): c for s, c in counts.items()})
     
