@@ -56,7 +56,7 @@ def run_train_bpe(
         special_tokens =special_tokens,
         split_special_token = special_tokens[0]
     )
-    current,peak = tracemalloc.get_traceback_memory() # return bytes to convert in GB -> N bytes * 1024 (KiB) * 1024 (MiB) * 1024 (GiB)
+    current,peak = tracemalloc.get_traced_memory() # return bytes to convert in GB -> N bytes * 1024 (KiB) * 1024 (MiB) * 1024 (GiB)
     tracemalloc.stop()
     pretoken_end = time.perf_counter()
 
@@ -70,7 +70,7 @@ def run_train_bpe(
     tracemalloc.start() # memory taken
     vocab, merges = train_bpe_heap(counts=counts,special_tokens=special_tokens,vocab_size=vocab_size,**kwargs)
     bpe_end = time.perf_counter()
-    current,peak = tracemalloc.get_traceback_memory() # return bytes to convert in GB -> N bytes * 1024 (KiB) * 1024 (MiB) * 1024 (GiB)
+    current,peak = tracemalloc.get_traced_memory() # return bytes to convert in GB -> N bytes * 1024 (KiB) * 1024 (MiB) * 1024 (GiB)
     tracemalloc.stop()
     elapsed_bpe_s = bpe_end - bpe_start
     print(f"BPE took {elapsed_bpe_s/60} min")
@@ -95,14 +95,14 @@ def train_bpe(data_folder_path, vocab_size, special_tokens, dataset):
     """return vocab and merges for a specific dataset"""
     data_path = os.path.join(data_folder_path, dataset)
 
-    print("*"*25,f"Start training tokenizer on {dataset} datset", "*"*25)   
+    print("*"*15,f"Start training tokenizer on {dataset} dataset", "*"*15)   
     pr_ts = cProfile.Profile()
     pr_ts.enable()
     vocab, merges = run_train_bpe(data_path,vocab_size,special_tokens)
     pr_ts.disable()
 
     # longest token
-    print("longest token in vocab:", max(vocab.values,key= len))
+    print("longest token in vocab:", max(vocab.values(),key= len))
 
 
     print("*"*25,f"result on {dataset} datset", "*"*25)
@@ -129,7 +129,7 @@ def main():
     merge_path_owt =  os.path.join(artifact_folder_path,"merges_32k.txt")
     dataset = ["tinystories_train.txt","openwebtext_train.txt"]
     
-    print("="*25,"Start training tokenizer", "="*25)   
+    print("="*30,"Start training tokenizer", "="*30)   
     vocab_ts, merge_ts   =  train_bpe(data_folder_path,vocab_size=10000,special_tokens=special_tokens,dataset=dataset[0])
     vocab_owt, merge_owt =  train_bpe(data_folder_path,vocab_size=32000,special_tokens=special_tokens,dataset=dataset[1])
     
