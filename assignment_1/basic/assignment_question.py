@@ -81,7 +81,8 @@ def run_train_bpe(
 
 def save_vocab_merges(vocab, merges, vocab_path, merges_path):
     """return a json file of the vocab with mapping {token_str: token_id}"""
-
+    os.makedirs(os.path.dirname(vocab_path), exist_ok=True)
+    os.makedirs(os.path.dirname(merges_path), exist_ok=True)
     vocab_json = {bytes_to_unicode_text(token_bytes):token_id for token_id, token_bytes in sorted(vocab.items())}
     with open(vocab_path, "w", encoding="utf-8") as f:
         json.dump(vocab_json, f, ensure_ascii=False) # not escaping non-ASCII characters
@@ -121,7 +122,7 @@ def main():
     DATA_FOLDER = "data"
     ARTIFACTS_FOLDER = "artifacts"
     data_folder_path = os.path.join(HERE, "..", DATA_FOLDER)
-    artifact_folder_path = os.path.join(HERE, "..", ARTIFACTS_FOLDER)
+    artifact_folder_path = os.path.join(HERE, ARTIFACTS_FOLDER)
     vocab_path_ts = os.path.join(artifact_folder_path,"vocab_10k.json")
     merge_path_ts =  os.path.join(artifact_folder_path,"merges_10k.txt")
     vocab_path_owt = os.path.join(artifact_folder_path,"vocab_32k.json")
@@ -138,3 +139,82 @@ def main():
 if __name__== "__main__":
     main()
 
+"""
+============================== Start training tokenizer ==============================
+*************** Start training tokenizer on tinystories_train.txt dataset ***************
+------------------------- Pretokenization -------------------------
+Pretokenizer took 0.22992387361591682 min
+Memory taken currently 0.005991010926663876 GB with a pick at 0.04069757927209139 GB
+------------------------- BPE Algorithm -------------------------
+Base vocabulary size: 257
+final vocab size: 10000
+Total merges performed: 9743
+BPE took 0.36352416874918464 min
+Memory taken currently 0.0015850821509957314 GB with a pick at 0.13660242035984993 GB
+longest token in vocab: b' accomplishment'
+************************* result on tinystories_train.txt datset *************************
+         24145167 function calls (24144962 primitive calls) in 35.612 seconds
+
+   Ordered by: internal time
+   List reduced from 563 to 10 due to restriction <10>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+       19   13.605    0.716   13.605    0.716 {method 'acquire' of '_thread.lock' objects}
+   886082    9.917    0.000   10.018    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:135(sift_down)
+   277780    4.900    0.000    7.641    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:170(_update_pair_stats_for_word_heap)
+  1710143    1.979    0.000    2.213    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:116(push)
+     9743    1.653    0.000   12.467    0.001 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:147(_select_best_pair_heap)
+   277780    0.564    0.000    0.723    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:40(_merge_pair_in_seq)
+   855236    0.494    0.000   10.483    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:127(pop_top)
+  6458310    0.457    0.000    0.457    0.000 {built-in method builtins.len}
+     9743    0.432    0.000    8.799    0.001 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:207(_apply_merge_to_sequences_heap)
+  4255725    0.270    0.000    0.270    0.000 {method 'get' of 'dict' objects}
+
+
+------------------------- Profile Analysis -------------------------
+Updating the heap and pair_counts is taking most of the time in the tokenizer process
+*************** Start training tokenizer on openwebtext_train.txt dataset ***************
+------------------------- Pretokenization -------------------------
+Pretokenizer took 2.012904306947409 min
+Memory taken currently 0.578836752101779 GB with a pick at 2.415622290223837 GB
+------------------------- BPE Algorithm -------------------------
+Base vocabulary size: 257
+final vocab size: 32000
+Total merges performed: 31743
+BPE took 101.58056926944991 min
+Memory taken currently 0.00523912999778986 GB with a pick at 20.344736545346677 GB
+longest token in vocab: b'\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82\xc3\x83\xc3\x82'
+************************* result on openwebtext_train.txt datset *************************
+         4458741759 function calls in 6216.156 seconds
+
+   Ordered by: internal time
+   List reduced from 249 to 10 due to restriction <10>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+153860798 3299.661    0.000 3318.758    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:135(sift_down)
+ 36031452 1121.832    0.000 1805.308    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:170(_update_pair_stats_for_word_heap)
+317138737  498.141    0.000  541.918    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:116(push)
+    31743  468.523    0.015 3922.755    0.124 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:147(_select_best_pair_heap)
+ 36031452  114.475    0.000  146.357    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:40(_merge_pair_in_seq)
+       19  107.146    5.639  107.146    5.639 {method 'acquire' of '_thread.lock' objects}
+153772412  102.112    0.000 3424.560    0.000 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:127(pop_top)
+1194881312   84.389    0.000   84.389    0.000 {built-in method builtins.len}
+    31743   78.804    0.002 2030.495    0.064 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/train_bpe.py:207(_apply_merge_to_sequences_heap)
+        1   74.317   74.317 6216.156 6216.156 /Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/assignment_question.py:19(run_train_bpe)
+
+
+------------------------- Profile Analysis -------------------------
+Updating the heap and pair_counts is taking most of the time in the tokenizer process
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/assignment_question.py", line 140, in <module>
+    
+  File "/Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/assignment_question.py", line 136, in main
+    save_vocab_merges(vocab_owt,merge_owt,vocab_path_owt,merge_path_owt)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/assignment_question.py", line 86, in save_vocab_merges
+    with open(vocab_path, "w", encoding="utf-8") as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/Users/theo/Curious/Learning_hub/Stanford/assignment_1/basic/../artifacts/vocab_10k.json'
+"""
