@@ -111,7 +111,6 @@ def train_bpe(data_folder_path, vocab_size, special_tokens, dataset):
     result_ts.print_stats(10)
 
     print("-"*25,"Profile Analysis", "-"*25)
-    print("""Updating the heap and pair_counts is taking most of the time in the tokenizer process""")
     return vocab, merges
 
 
