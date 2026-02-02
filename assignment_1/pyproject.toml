@@ -5,7 +5,9 @@ description = "Stanford assignment 1"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "psutil>=7.2.2",
     "pytest>=9.0.2",
+    "tiktoken>=0.12.0",
 ]
 
 [dependency-groups]
