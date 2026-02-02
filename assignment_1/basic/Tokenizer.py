@@ -14,7 +14,7 @@ class Tokenizer:
         self.special_tokens = special_tokens or []
         self.special_tokens_set = set(self.special_tokens)
         if self.special_tokens:
-            esc=[re.escape(t) for t in sorted(special_tokens, key = len, reverse= True)]
+            esc=[re.escape(t) for t in sorted(self.special_tokens, key = len, reverse= True)]
             self.special_split_pat = re.compile("(" + "|".join(esc)+ ")")
         else:
             self.special_split_pat = None
@@ -45,7 +45,7 @@ class Tokenizer:
         for part in parts:
             if not part:
                 continue
-            if part in self.special_tokens:
+            if part in self.special_tokens: 
                 ids = [self.token_to_id[part.encode("utf-8")]]
                 seq_id.extend(ids)
             else:
@@ -54,12 +54,6 @@ class Tokenizer:
                     pretoken_bytes = pretoken.encode("utf-8")
                     if pretoken_bytes in cache: # diretcly extend the list[id] of seen pretoken 
                         seq_id.extend(cache[pretoken_bytes])
-                        continue
-
-                    if self.special_tokens is not None and pretoken in self.special_tokens:
-                        ids = [self.token_to_id[pretoken_bytes]]
-                        cache[pretoken_bytes] = ids
-                        seq_id.extend(ids)
                         continue
 
                     seq = [bytes([b]) for b in pretoken_bytes]
@@ -107,7 +101,6 @@ def test():
     print(tok.decode(tok.encode("<|endoftext|>")))
     test_string = "Héllò hôw <|endoftext|><|endoftext|> are ü? 🙃<|endoftext|>"
     encoded_ids = tok.encode(test_string)
-    print(tok._pat.finditer(test_string))
     tokenized_string = [tok.decode([x]) for x in encoded_ids]
     # Ensure the special <|endoftext|> token is preserved
     assert tokenized_string.count("<|endoftext|>") == 3
