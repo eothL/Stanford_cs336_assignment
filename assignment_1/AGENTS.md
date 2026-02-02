@@ -180,9 +180,9 @@ This assignment provides hands-on experience with the fundamental building block
 - **Load** (`run_load_checkpoint`): Restore model state from checkpoint
 - **Goal**: Enable training resumption and model persistence
 
-### 8. **Tokenization** 🟡
+### 8. **Tokenization** ✅
 
-#### BPE Tokenizer (`get_tokenizer`) 🟡
+#### BPE Tokenizer (`get_tokenizer`) ✅
 - **Task**: Implement Byte Pair Encoding tokenizer
 - **Features**:
   - Vocabulary lookup
