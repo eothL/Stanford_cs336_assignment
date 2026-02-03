@@ -8,9 +8,9 @@ import os
 # import heapq
 # to use heapq.heappush, heapq.heappop and heapq.heapify
 
-def get_compression_rate(vocab: dict[int, bytes], text: str) -> float:
-    number_bytes = len(bytes(text, encoding="utf-8"))
-    number_tokens = len(vocab)
+def get_compression_rate(token: list[int], text: str) -> float:
+    number_bytes = len(text.encoding("utf-8"))
+    number_tokens = len(token)
     return number_bytes / number_tokens
 
 
