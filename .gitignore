@@ -13,3 +13,5 @@ local/
 .pytest_cache/ 
 uv.lock
 *.egg-info/
+
+.bin
