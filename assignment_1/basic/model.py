@@ -53,3 +53,28 @@ class Embedding(nn.Module):
     
     def forward(self, token_ids: Int[Tensor, "..."]) -> torch.Tensor:
         return self.weight[token_ids]
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, d_model: int, eps:float = 1e-5, device= None, dtype=None):
+        super().__init__()
+        self.factory_kwargs = {}
+        if device is not None:
+            self.factory_kwargs["device"] = device
+        if dtype is not None:
+            self.factory_kwargs["dtype"] = dtype
+
+        self.d_model =d_model
+        self.eps = eps
+        self.weight = nn.Parameter(torch.empty((d_model,),**self.factory_kwargs))
+        nn.init.trunc_normal_(self.weight)
+
+    def forward(self, x:Float[Tensor, "batch sequence length d_model"])-> torch.Tensor:
+        # prevent overflow when applying square to input convert input to float 32
+        in_dtype = x.dtype 
+        x_fp32 =x.to(torch.float32)
+        mean_square = x_fp32.pow(2).mean(dim=-1, keepdim=True)
+        RMS = torch.rsqrt(mean_square + self.eps) #rsqrt is reverser sqrt 1/sqrt(X)
+        result = x_fp32*self.weight*RMS
+        return result.to(in_dtype) 
+    
