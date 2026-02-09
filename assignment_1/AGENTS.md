@@ -1,4 +1,3 @@
-
 This project CS336 Assignment 1 (Basics) implements the core building blocks of modern transformer language models from scratch, including NN layers, attention mechanism, optimization algorithm, and tokenization. The assignment is structured around implementing various functions in the `adapters.py` file to pass comprehensive test suites. 
 
 ## Key Learning Objectives
