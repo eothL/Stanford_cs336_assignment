@@ -89,7 +89,14 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    from basic.model import positionwise_feedforward
+    layer = positionwise_feedforward(d_model=d_model)
+    layer.d_ff= d_ff
+    layer.w1_weight= torch.nn.Parameter(w1_weight)
+    layer.w2_weight= torch.nn.Parameter(w2_weight)
+    layer.w3_weight= torch.nn.Parameter(w3_weight)
+
+    return layer.forward(in_features)
 
 
 def run_scaled_dot_product_attention(
@@ -402,7 +409,8 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    raise NotImplementedError
+    from basic.model import positionwise_feedforward
+    return positionwise_feedforward.SiLU(in_features)
 
 
 def run_get_batch(

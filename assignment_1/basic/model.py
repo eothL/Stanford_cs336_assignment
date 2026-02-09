@@ -78,3 +78,34 @@ class RMSNorm(nn.Module):
         result = x_fp32*self.weight*RMS
         return result.to(in_dtype) 
     
+
+class positionwise_feedforward(nn.Module):
+    def __init__(self, d_model, device= None, dtype = None):
+        super().__init__()
+        self.factory_kwargs = {}
+        if device is not None:
+            self.factory_kwargs["device"] = device
+        if dtype is not None:
+            self.factory_kwargs["dtype"] = dtype
+
+        self.d_model = d_model
+        self.d_ff = int(((8/3 * d_model)//64)*64) # keep a multiple of 64 to make a good use of the hardware
+        self.w1_weight: Float[Tensor, "d_model d_ff"] = nn.Parameter(torch.empty((self.d_model,self.d_ff), **self.factory_kwargs))
+        self.w3_weight: Float[Tensor, "d_model d_ff"] = nn.Parameter(torch.empty((self.d_model,self.d_ff), **self.factory_kwargs))
+        self.w2_weight: Float[Tensor, "d_ff d_model"]= nn.Parameter(torch.empty((self.d_ff,self.d_model), **self.factory_kwargs))
+    
+    
+    def SiLU(self, x:Float[Tensor, "... d_ff"])-> Float[Tensor, "... model"]:
+        return torch.mul(x,torch.sigmoid(x))
+    
+    def SwiGLU(self,x: Float[Tensor, "... d_model"]) -> Float[Tensor, "... d_ff"]:
+        # x is often a row vector in Pytorch
+        # instead of doing W1@x for column vector we need to do x@W1.T
+        # elementwise multiplication
+        return torch.mul( 
+            self.SiLU(x @ self.w1_weight.T), 
+            x @ self.w3_weight.T
+            )
+    
+    def forward(self,x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
+        return self.SwiGLU(x)@self.w2_weight.T
