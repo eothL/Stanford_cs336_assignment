@@ -1,7 +1,7 @@
 # this file is to answer question from the assignment 1 pdf file
 from __future__ import annotations
 
-from .train_bpe import train_bpe_heap, get_compression_rate
+from .train_bpe import train_bpe_heap
 from .pretokenization import count_pretokens_parallel, find_chunk_boundaries
 from .bytes_utils import bytes_to_unicode_text
 from .Tokenizer import Tokenizer
