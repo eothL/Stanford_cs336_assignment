@@ -90,11 +90,21 @@ def run_swiglu(
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
     from basic.model import positionwise_feedforward
-    layer = positionwise_feedforward(d_model=d_model)
-    layer.d_ff= d_ff
-    layer.w1_weight= torch.nn.Parameter(w1_weight)
-    layer.w2_weight= torch.nn.Parameter(w2_weight)
-    layer.w3_weight= torch.nn.Parameter(w3_weight)
+    layer = positionwise_feedforward(d_model=d_model, d_ff=d_ff)
+
+    """
+    instead of doing layer.w1_weight = w1_weight
+    we use .copy_
+    1. It keeps the original registered nn.Parameter objects intact.
+    2. It avoids re-registering/replacing parameters (cleaner module state).
+    3. It preserves device/dtype/layout choices from construction.
+    4. It’s the standard way to load known tensor values into an existing module.
+    """
+
+    with torch.no_grad():
+        layer.w1_weight.copy_(w1_weight)
+        layer.w2_weight.copy_(w2_weight)
+        layer.w3_weight.copy_(w3_weight)
 
     return layer.forward(in_features)
 

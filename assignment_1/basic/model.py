@@ -49,6 +49,7 @@ class Embedding(nn.Module):
         self.num_embeddings =num_embeddings
         self.embedding_dim = embedding_dim
         self.weight = nn.Parameter(torch.empty((self.num_embeddings, self.embedding_dim), **self.factory_kwargs))
+        
         nn.init.trunc_normal_(self.weight) # fill the matrix from truncated normal distribution between -3 sigma and 3 sigma
     
     def forward(self, token_ids: Int[Tensor, "..."]) -> torch.Tensor:
@@ -67,6 +68,7 @@ class RMSNorm(nn.Module):
         self.d_model =d_model
         self.eps = eps
         self.weight = nn.Parameter(torch.empty((d_model,),**self.factory_kwargs))
+        
         nn.init.trunc_normal_(self.weight)
 
     def forward(self, x:Float[Tensor, "batch sequence length d_model"])-> torch.Tensor:
@@ -80,7 +82,11 @@ class RMSNorm(nn.Module):
     
 
 class positionwise_feedforward(nn.Module):
-    def __init__(self, d_model, device= None, dtype = None):
+    w1_weight : Float[Tensor, " d_ff d_model"]
+    w3_weight : Float[Tensor, "d_ff d_model"]
+    w2_weight : Float[Tensor, "d_model d_ff"]
+
+    def __init__(self, d_model: int, d_ff: int | None = None, device= None, dtype = None):
         super().__init__()
         self.factory_kwargs = {}
         if device is not None:
@@ -89,14 +95,18 @@ class positionwise_feedforward(nn.Module):
             self.factory_kwargs["dtype"] = dtype
 
         self.d_model = d_model
-        self.d_ff = int(((8/3 * d_model)//64)*64) # keep a multiple of 64 to make a good use of the hardware
-        self.w1_weight: Float[Tensor, "d_model d_ff"] = nn.Parameter(torch.empty((self.d_model,self.d_ff), **self.factory_kwargs))
-        self.w3_weight: Float[Tensor, "d_model d_ff"] = nn.Parameter(torch.empty((self.d_model,self.d_ff), **self.factory_kwargs))
-        self.w2_weight: Float[Tensor, "d_ff d_model"]= nn.Parameter(torch.empty((self.d_ff,self.d_model), **self.factory_kwargs))
+        self.d_ff = d_ff if d_ff is not None else int(((8/3 * d_model)//64)*64) # keep a multiple of 64 to make a good use of the hardware
+        self.w1_weight = nn.Parameter(torch.empty((self.d_ff, self.d_model), **self.factory_kwargs))
+        self.w3_weight = nn.Parameter(torch.empty((self.d_ff, self.d_model), **self.factory_kwargs))
+        self.w2_weight = nn.Parameter(torch.empty((self.d_model, self.d_ff), **self.factory_kwargs))
+
+        nn.init.trunc_normal_(self.w1_weight)
+        nn.init.trunc_normal_(self.w2_weight)
+        nn.init.trunc_normal_(self.w3_weight)
     
-    
-    def SiLU(self, x:Float[Tensor, "... d_ff"])-> Float[Tensor, "... model"]:
-        return torch.mul(x,torch.sigmoid(x))
+    @staticmethod
+    def SiLU(x:Float[Tensor, "..."])-> Float[Tensor, "..."]:
+        return x * torch.sigmoid(x)
     
     def SwiGLU(self,x: Float[Tensor, "... d_model"]) -> Float[Tensor, "... d_ff"]:
         # x is often a row vector in Pytorch
