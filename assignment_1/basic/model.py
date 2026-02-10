@@ -119,3 +119,71 @@ class positionwise_feedforward(nn.Module):
     
     def forward(self,x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
         return self.SwiGLU(x)@self.w2_weight.T
+    
+
+class RoPE_full_matrix(nn.Module):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+        super().__init__()
+        assert d_k% 2 ==0 
+
+        self.theta = theta
+        self.d_k = d_k
+        self.max_seq_len = max_seq_len
+        k_idx = torch.arange(d_k // 2, device=device, dtype=torch.float32)
+        inv_freq = self.theta**(-2*k_idx/self.d_k)
+        pos = torch.arange(max_seq_len, device=device, dtype=torch.float32)
+        angle = pos[:, None] * inv_freq[None,:]
+        cos = torch.cos(angle)
+        sin = torch.sin(angle)
+        R = torch.zeros((max_seq_len,d_k,d_k), device=device, dtype=torch.float32)
+        even = 2 * torch.arange(self.d_k // 2, device=device)
+        odd = even + 1
+
+        R[:, even, odd] = -sin
+        R[:, odd, even] = sin
+        R[:, even, even] = cos
+        R[:, odd, odd] = cos
+        self.register_buffer("R", R, persistent=False)
+
+    def forward(
+        self,
+        x: Float[Tensor, "... seq_len d_k"],
+        token_positions: Int[Tensor, "... seq_len"],
+    ) -> Float[Tensor, "... seq_len d_k"]:
+        token_positions = token_positions.long()
+        R_i =self.R[token_positions] #(..., seq_len, d_k, d_k)
+        y= R_i @ x.unsqueeze(-1) 
+        return y.squeeze(-1) #(..., seq_len, d_k)
+
+class RoPE(nn.Module):
+    # theta: value for the RoPE
+    # d_k: dimension of query and key vectors
+    # maximum sequence length that will be inputted
+    # device to store the buffer on
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+        super().__init__()
+        assert d_k% 2 ==0 
+        self.theta = theta
+        self.d_k = d_k
+        self.max_seq_len = max_seq_len
+
+        k = torch.arange(d_k // 2, device=device, dtype=torch.float32)            #(d_k//2,)
+        inv_freq = theta ** (-2.0 * k / d_k)                                      #(d_k//2,)
+        pos = torch.arange(max_seq_len, device=device, dtype=torch.float32)       #(max_seq_len,)
+        angles = pos[:, None] * inv_freq[None, :]                                 #(max_seq_len, d_k//2)
+
+        self.register_buffer("cos_cached", torch.cos(angles), persistent=False)
+        self.register_buffer("sin_cached", torch.sin(angles), persistent=False)
+
+    def forward(self, x, token_positions):
+        token_positions = token_positions.long()
+        cos = self.cos_cached[token_positions]   # (..., seq_len, d_k//2)
+        sin = self.sin_cached[token_positions]   # (..., seq_len, d_k//2)
+
+        x_even = x[..., 0::2]
+        x_odd  = x[..., 1::2]
+
+        out = torch.empty_like(x)
+        out[..., 0::2] = x_even * cos - x_odd * sin
+        out[..., 1::2] = x_even * sin + x_odd * cos
+        return out

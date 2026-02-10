@@ -33,6 +33,7 @@ def run_linear(
     layer.weight = torch.nn.Parameter(weights)
     return layer.forward(in_features)
 
+
 def run_embedding(
     vocab_size: int,
     d_model: int,
@@ -58,7 +59,6 @@ def run_embedding(
     embedding_layer.weight = torch.nn.Parameter(weights)
     return embedding_layer.forward(token_ids)
     
-
 
 def run_swiglu(
     d_model: int,
@@ -223,7 +223,10 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    from basic.model import RoPE 
+    layer = RoPE(theta=theta, d_k=d_k, max_seq_len=max_seq_len, device=in_query_or_key.device)
+
+    return layer.forward(x= in_query_or_key, token_positions=token_positions)
 
 
 def run_transformer_block(
@@ -405,7 +408,6 @@ def run_rmsnorm(
     RMSNorm_layer = RMSNorm(d_model=d_model, eps=eps)
     RMSNorm_layer.weight = torch.nn.Parameter(weights)
     return RMSNorm_layer.forward(in_features)
-
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
