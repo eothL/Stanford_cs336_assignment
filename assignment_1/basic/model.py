@@ -208,6 +208,7 @@ class scaled_dot_product_attention(nn.Module):
     def __init__(self, mask: Tensor | None=None):
         super().__init__()
         self.mask = mask 
+        self.register_buffer("mask", mask, persistent=False)
         
     def forward(self, Q:torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> Float[Tensor, "... seq_len d_v"]:
         d_k = Q.shape[-1]
@@ -216,7 +217,7 @@ class scaled_dot_product_attention(nn.Module):
         if self.mask is None:
             QK_compute = softmax(score)
         else:
-            score = score.masked_fill(self.mask==0, -torch.inf)
+            score = score.masked_fill(self.mask==0, -1e4) #1/True = keep, 0/False = block, we can either use -torch.inf or -1e9 or -1e4 or torch.finfo(score.dtype).min
             QK_compute = softmax(score)
         return QK_compute @ V
 
