@@ -145,14 +145,11 @@ class RoPE_full_matrix(nn.Module):
         R[:, odd, odd] = cos
         self.register_buffer("R", R, persistent=False)
 
-    def forward(
-        self,
-        x: Float[Tensor, "... seq_len d_k"],
-        token_positions: Int[Tensor, "... seq_len"],
-    ) -> Float[Tensor, "... seq_len d_k"]:
-        token_positions = token_positions.long()
+    def forward(self, x: Float[Tensor, "... seq_len d_k"], token_positions: Int[Tensor, "... seq_len"]) -> Float[Tensor, "... seq_len d_k"]:
+        # Indices for tensor lookup must be integer type (int64/long in PyTorch)
+        token_positions = token_positions.to(torch.long)
         R_i =self.R[token_positions] #(..., seq_len, d_k, d_k)
-        y= R_i @ x.unsqueeze(-1) 
+        y= R_i @ x.unsqueeze(-1) # (..., seq_len, d_k, d_k) * (..., seq_len, d_k, 1)
         return y.squeeze(-1) #(..., seq_len, d_k)
 
 class RoPE(nn.Module):
@@ -176,7 +173,9 @@ class RoPE(nn.Module):
         self.register_buffer("sin_cached", torch.sin(angles), persistent=False)
 
     def forward(self, x, token_positions):
-        token_positions = token_positions.long()
+        # Ensure positions are int64 so we can index into the cached (max_seq_len, d_k//2) cos/sin tables
+        token_positions = token_positions.to(torch.long) # new tensor with dtype = int64 if it is not already the case else return the same tensor
+
         cos = self.cos_cached[token_positions]   # (..., seq_len, d_k//2)
         sin = self.sin_cached[token_positions]   # (..., seq_len, d_k//2)
 
@@ -187,3 +186,17 @@ class RoPE(nn.Module):
         out[..., 0::2] = x_even * cos - x_odd * sin
         out[..., 1::2] = x_even * sin + x_odd * cos
         return out
+
+
+class Softmax(nn.Module):
+    # d_i : a dimension i and apply softmax to the i-th dimension of the input tensor
+    # For numerical stability, we will substract the largest value in the input tensor as softmax operation is invariant to adding any constant c to all inputs
+    def __init__(self, d_i: int):
+        super().__init__()
+        self.d_i = d_i
+
+    def forward(self, x:Float[Tensor, "..."]) -> Float[Tensor, "..."]:
+        exp_x_stable = torch.exp(x - x.amax(dim= self.d_i, keepdim=True))
+        return exp_x_stable/exp_x_stable.sum(dim= self.d_i, keepdim=True)
+    
+
