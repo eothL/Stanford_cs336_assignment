@@ -172,7 +172,7 @@ class RoPE(nn.Module):
         self.register_buffer("cos_cached", torch.cos(angles), persistent=False)
         self.register_buffer("sin_cached", torch.sin(angles), persistent=False)
 
-    def forward(self, x, token_positions):
+    def forward(self, x:Float[Tensor, "... seq_len d_k"], token_positions:Int[Tensor, "... seq_len"])-> Float[Tensor, "... seq_len d_k"]:
         # Ensure positions are int64 so we can index into the cached (max_seq_len, d_k//2) cos/sin tables
         token_positions = token_positions.to(torch.long) # new tensor with dtype = int64 if it is not already the case else return the same tensor
 
@@ -208,8 +208,7 @@ class scaled_dot_product_attention(nn.Module):
     def __init__(self, mask: Tensor | None=None):
         super().__init__()
         self.mask = mask 
-        self.register_buffer("mask", mask, persistent=False)
-        
+
     def forward(self, Q:torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> Float[Tensor, "... seq_len d_v"]:
         d_k = Q.shape[-1]
         softmax = Softmax(dim=-1)
@@ -220,6 +219,46 @@ class scaled_dot_product_attention(nn.Module):
             score = score.masked_fill(self.mask==0, -1e4) #1/True = keep, 0/False = block, we can either use -torch.inf or -1e9 or -1e4 or torch.finfo(score.dtype).min
             QK_compute = softmax(score)
         return QK_compute @ V
+    
 
+
+class multihead_self_attention(nn.Module):
+    def __init__(self, d_model: int,  num_heads ):
+        super().__init__()
+        self.d_model   = d_model
+        self.num_heads = num_heads
+        self.dk = self.dv= d_model // num_heads
+
+    def forward(self,
+                q_proj_weight: Float[Tensor, " d_k d_in"],
+                k_proj_weight: Float[Tensor, " d_k d_in"],
+                v_proj_weight: Float[Tensor, " d_v d_in"],
+                o_proj_weight: Float[Tensor, " d_model d_v"],
+                x: Float[Tensor, " ... sequence_length d_in"],
+                token_positions: Int[Tensor, "... seq_len"] | None = None,
+                rope=None,)->Float[Tensor, "... sequence_length d_out"]:
+        Q_head = torch.split(q_proj_weight, int(self.dk))
+        K_head = torch.split(k_proj_weight, int(self.dk))
+        V_head = torch.split(v_proj_weight, int(self.dv))
+        multi_head_attn = []
+        seq_len = x.shape[-2]
+        mask = torch.tril(
+            torch.ones((seq_len,seq_len), dtype=torch.bool, device = x.device)
+            )
+        sdpa = scaled_dot_product_attention(mask)
+
+        for q_proj,k_proj,v_proj in zip(Q_head, K_head, V_head):
+            Q: Float[Tensor, "... seq_len d_k_head"]= x @ q_proj.T 
+            K: Float[Tensor, "... seq_len d_k_head"]= x @ k_proj.T 
+            V: Float[Tensor, "... seq_len d_v_head"]= x @ v_proj.T 
+            if rope is not None and token_positions is not None:
+                Q = rope(Q, token_positions)
+                K = rope(K, token_positions)
+            attn_h = sdpa(Q, K, V)
+            multi_head_attn.append(attn_h)
+
+            
+        multi_head_attn: Float[Tensor, "... seq_len d_model"] = torch.cat(multi_head_attn, dim=-1) 
+        return multi_head_attn  @ o_proj_weight.T    
 
      
