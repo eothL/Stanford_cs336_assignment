@@ -127,7 +127,9 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    from basic.model import scaled_dot_product_attention
+    layer = scaled_dot_product_attention(mask)
+    return layer(Q,K,V)
 
 
 def run_multihead_self_attention(
@@ -463,7 +465,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
     """
     from basic.model import Softmax
     layer = Softmax(dim)
-    return layer.forward(in_features)
+    return layer(in_features)
 
 
 def run_cross_entropy(

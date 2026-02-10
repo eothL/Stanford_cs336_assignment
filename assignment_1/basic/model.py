@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from jaxtyping import Float, Int
 from torch import Tensor
-import numpy as np
+import math
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -191,12 +191,34 @@ class RoPE(nn.Module):
 class Softmax(nn.Module):
     # d_i : a dimension i and apply softmax to the i-th dimension of the input tensor
     # For numerical stability, we will substract the largest value in the input tensor as softmax operation is invariant to adding any constant c to all inputs
-    def __init__(self, d_i: int):
+    def __init__(self, dim: int):
         super().__init__()
-        self.d_i = d_i
+        self.d_i = dim
 
     def forward(self, x:Float[Tensor, "..."]) -> Float[Tensor, "..."]:
         exp_x_stable = torch.exp(x - x.amax(dim= self.d_i, keepdim=True))
         return exp_x_stable/exp_x_stable.sum(dim= self.d_i, keepdim=True)
     
 
+class scaled_dot_product_attention(nn.Module):
+    Q: Float[Tensor, "batch_size ... seq_len d_k"] # queries
+    K: Float[Tensor, "batch_size ... seq_len d_k"] # key
+    V: Float[Tensor, "batch_size ... seq_len d_v"] # values
+    Mask: Float[Tensor, "seq_len seq_len"]
+    def __init__(self, mask: Tensor | None=None):
+        super().__init__()
+        self.mask = mask 
+        
+    def forward(self, Q:torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> Float[Tensor, "... seq_len d_v"]:
+        d_k = Q.shape[-1]
+        softmax = Softmax(dim=-1)
+        score = (Q @ K.transpose(-2,-1)) / math.sqrt(d_k) 
+        if self.mask is None:
+            QK_compute = softmax(score)
+        else:
+            score = score.masked_fill(self.mask==0, -torch.inf)
+            QK_compute = softmax(score)
+        return QK_compute @ V
+
+
+     
