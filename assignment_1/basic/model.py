@@ -25,7 +25,11 @@ class Linear(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.weight = nn.Parameter(torch.empty((out_features,in_features), **self.factory_kwargs)) 
-        self.bias = nn.Parameter(torch.empty((out_features,), **self.factory_kwargs)) if bias else None
+        self.bias = nn.Parameter(torch.empty((out_features,), **self.factory_kwargs)) if bias is not None else None
+
+        nn.init.trunc_normal_(self.weight)
+        if self.bias is not None:
+            nn.init.trunc_normal_(self.bias) 
 
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         if self.bias is not None:
@@ -71,7 +75,7 @@ class RMSNorm(nn.Module):
         
         nn.init.trunc_normal_(self.weight)
 
-    def forward(self, x:Float[Tensor, "batch sequence length d_model"])-> torch.Tensor:
+    def forward(self, x:Float[Tensor, "batch seq_len d_model"])-> torch.Tensor:
         # prevent overflow when applying square to input convert input to float 32
         in_dtype = x.dtype 
         x_fp32 =x.to(torch.float32)
@@ -234,9 +238,9 @@ class multihead_self_attention(nn.Module):
                 k_proj_weight: Float[Tensor, " d_k d_in"],
                 v_proj_weight: Float[Tensor, " d_v d_in"],
                 o_proj_weight: Float[Tensor, " d_model d_v"],
-                x: Float[Tensor, " ... sequence_length d_in"],
+                x: Float[Tensor, " ... seq_len d_in"],
                 token_positions: Int[Tensor, "... seq_len"] | None = None,
-                rope=None,)->Float[Tensor, "... sequence_length d_out"]:
+                rope=None,)->Float[Tensor, "... seq_len d_out"]:
         Q_head = torch.split(q_proj_weight, int(self.dk))
         K_head = torch.split(k_proj_weight, int(self.dk))
         V_head = torch.split(v_proj_weight, int(self.dv))
