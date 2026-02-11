@@ -361,7 +361,13 @@ number of trainable paramater =                                                 
 if one parameter is represented in single precision floating point meaning FP32 or 32 bits(4 bytes):
 it will require more than 8GB of memory in FP32
 in FP8, we could go down to 2GB of memory.                                                            
-                                                            
+
+
+b)
+the matrix input is size : (context_len * vocab_size)
+token embedding : 
+
+
 """
 
 """

@@ -383,12 +383,10 @@ def cross_entropy(predicted_logits: Float[Tensor, "batch_size vocab_size"], targ
         o_i (float): predicted logits 
         x_i+1 (int): targets, next id token 
     """
-    batch_size = predicted_logits.shape[0]
-    loss = torch.empty((batch_size,)).to(device=predicted_logits.device)
+    targets = targets.long()
+    targets_logits = torch.empty(predicted_logits.shape[0], device= predicted_logits.device)
+    for i, batch in enumerate(predicted_logits):
+        targets_logits[i] = batch[targets[i]]
+    loss = torch.logsumexp(predicted_logits, dim=-1) - targets_logits
 
-    for i in range (batch_size):
-        all_logits = torch.logsumexp(predicted_logits[i], dim=-1) # Use this function as it uses the tricks of subtracting maximum value
-        logit_target = predicted_logits[i, targets[i]]
-        loss[i]= all_logits - logit_target
-
-    return loss.mean(dim=-1)
+    return loss.mean()
