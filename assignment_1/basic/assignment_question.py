@@ -149,6 +149,7 @@ def get_sample(data_path, split_tokens_bytes, num_process = os.cpu_count() - 1, 
     sample = rng.sample(sample, k)
     return sample
 
+
 def tokenizer_experiments(data_path, vocab_path_ts, merge_path_ts,  vocab_path_owt, merge_path_owt,split_tokens_bytes,dataset,special_tokens):
     data_path_ts = os.path.join(data_path,dataset[0])
     data_path_owt = os.path.join(data_path,dataset[1])
@@ -216,7 +217,8 @@ def tokenizer_experiments(data_path, vocab_path_ts, merge_path_ts,  vocab_path_o
     print("throughput bytes/second for token_owt", throughput_owt)
     print(f"for 825GB, it will take : {825*1024**3/throughput_ts} s or {(825*1024**3/throughput_ts)/(3600*24)} days")
     print(f"for 825GB, it will take with owt tokenizer: {825*1024**3/throughput_owt} s or {(825*1024**3/throughput_owt)/(3600*24)} days")
-    
+
+
 def serialization_data_simple(data_path, vocab_path, merge_path,dataset, split_tokens_bytes ,special_tokens):
     data_path = os.path.join(data_path,dataset)
     tokenizer = Tokenizer.from_files(vocab_path, merge_path, special_tokens)
@@ -232,6 +234,7 @@ def serialization_data_simple(data_path, vocab_path, merge_path,dataset, split_t
             id_chunk = tokenizer.encode(chunk)
             ids.extend(id_chunk)
     return np.array(ids, dtype=np.uint16)
+
 
 def serialization_data(data_path, vocab_path, merge_path,dataset, split_tokens_bytes ,special_tokens,artifact_folder_path):
     data_path = os.path.join(data_path,dataset)
@@ -270,6 +273,7 @@ def serialization_data(data_path, vocab_path, merge_path,dataset, split_tokens_b
     arr.flush()
 
     return arr 
+
 
 if __name__== "__main__":
     special_tokens= ["<|endoftext|>"]   
@@ -316,6 +320,50 @@ if __name__== "__main__":
         result = pstats.Stats(pr)
         result.sort_stats(pstats.SortKey.TIME)
         result.print_stats(20)
+
+"""
+========================== Transformer LM resource accounting =============================
+a)
+GPT-2 XL configuration:
+vocab_size : 50,257
+context_length : 1,024
+num_layers : 48
+d_model : 1,600  = the dimensionality of the model embeddings and sublayer outputs
+num_heads : 25
+d_ff : 6,400
+
+bias parameter off for every layer 
+number of trainable paramater =                                                 if we add bias parameter
+    Embedding layer : vocab_size * d_model = 50 257 * 1 600 = 80 411 200        + 50 257 (vocab size/num_embedding)
+    embedding_dim : dimension of embedding vector = d_model
+    Transformer Block : num_layers = 48
+        RMSnorm 1: d_model                                  = 1600              + 1600
+        MHA_self_attention: num_heads = 25
+            q_proj :   d_model * d_model = 1600 * 1600      = 2 560 000         + 1600
+                per head size: (num_head, d_model//num_heads)
+            k_proj :   d_model * d_model = 1600 * 1600      = 2 560 000         + 1600
+                per head size: (num_head, d_model//num_heads)
+            v_proj :   d_model * d_model = 1600 * 1600      = 2 560 000         + 1600
+                per head size: (num_head, d_model//num_heads)
+            o_proj :   d_model * d_model = 1600 * 1600      = 2 560 000         + 1600
+        RMSnorm 2: d_model                                  = 1600
+        positionwise - FFN:
+            w1: d_model * d_ff = 1600 * 6400                = 10 240 000        + 6400
+            w3: d_model * d_ff = 1600 * 6400                = 10 240 000        + 6400
+            w2: d_ff * d_model = 6400 * 1600                = 10 240 000        + 1600
+        ----------------------------------------------------------------
+                                                            = 40 963 200 * 48   + 20 800 * 48
+                                                            = 1 966 233 600.    + 998 400
+    -------------------------------------------------------------------------
+                                                            = 1,9 B + 80 M 
+                                                            = 2 046 644 800
+                                                            = 2 B parameters    + 1 M bias parameters
+if one parameter is represented in single precision floating point meaning FP32 or 32 bits(4 bytes):
+it will require more than 8GB of memory in FP32
+in FP8, we could go down to 2GB of memory.                                                            
+        
+                                                            
+"""
 
 """
 ============================== Experiments on tokenizer ==============================
