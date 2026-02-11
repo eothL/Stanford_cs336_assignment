@@ -3,7 +3,6 @@ import torch.nn as nn
 from jaxtyping import Float, Int
 from torch import Tensor
 import math
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class Linear(nn.Module):
@@ -38,9 +37,10 @@ class Linear(nn.Module):
         if self.bias is True:
             nn.init.trunc_normal_(self.bias) 
 
-    def forward(self, x:torch.Tensor) -> torch.Tensor:
-        if self.bias is True:
-            return x@self.weight.T + self.bias
+    def forward(self, x:Float[Tensor, "... in_features"]) -> Float[Tensor, "... out_features"]:
+        #?dimension: expected input shape is (..., in_features); confirm this contract. CONFIRMED
+        if self.bias is not None:
+            return x@self.weight.T + self.bias 
         else:
             return x@self.weight.T
 
@@ -96,7 +96,7 @@ class RMSNorm(nn.Module):
         
         nn.init.trunc_normal_(self.weights)
 
-    def forward(self, x:Float[Tensor, "batch seq_len d_model"])-> torch.Tensor:
+    def forward(self, x:Float[Tensor, "... d_model"])-> torch.Tensor:
         # prevent overflow when applying square to input convert input to float 32
         in_dtype = x.dtype 
         x_fp32 =x.to(torch.float32)
@@ -174,8 +174,10 @@ class RoPE_full_matrix(nn.Module):
         self.register_buffer("R", R, persistent=False)
 
     def forward(self, x: Float[Tensor, "... seq_len d_k"], token_positions: Int[Tensor, "... seq_len"]) -> Float[Tensor, "... seq_len d_k"]:
+        assert x.shape[:-2] == token_positions.shape[::]
         # Indices for tensor lookup must be integer type (int64/long in PyTorch)
         token_positions = token_positions.to(torch.long)
+        #?dimension: token_positions leading dims must match x leading dims (except final d_k); confirm. CONFIRMED
         R_i =self.R[token_positions] #(..., seq_len, d_k, d_k)
         y= R_i @ x.unsqueeze(-1) # (..., seq_len, d_k, d_k) * (..., seq_len, d_k, 1)
         return y.squeeze(-1) #(..., seq_len, d_k)
@@ -195,28 +197,29 @@ class RoPE(nn.Module):
         self.d_k = d_k
         self.max_seq_len = max_seq_len
 
-        k = torch.arange(d_k // 2, device=device, dtype=torch.float32)            #(d_k//2,)
-        inv_freq = theta ** (-2.0 * k / d_k)                                      #(d_k//2,)
-        pos = torch.arange(max_seq_len, device=device, dtype=torch.float32)       #(max_seq_len,)
-        angles = pos[:, None] * inv_freq[None, :]                                 #(max_seq_len, d_k//2)
+        k:Float[Tensor, "d_k_half"] = torch.arange(d_k // 2, device=device, dtype=torch.float32)  
+        inv_freq:Float[Tensor, "d_k_half"]= theta ** (-2.0 * k / d_k)                                     
+        pos:Float[Tensor, "max_seq_len"] = torch.arange(max_seq_len, device=device, dtype=torch.float32)
+        angles:Float[Tensor, "max_seq_len d_k_half"] = pos[:, None] * inv_freq[None, :]
 
         self.register_buffer("cos_cached", torch.cos(angles), persistent=False)
         self.register_buffer("sin_cached", torch.sin(angles), persistent=False)
 
     def forward(self, x:Float[Tensor, "... seq_len d_k"], token_positions:Int[Tensor, "... seq_len"])-> Float[Tensor, "... seq_len d_k"]:
-        # Ensure positions are int64 so we can index into the cached (max_seq_len, d_k//2) cos/sin tables
+        # Ensure positions are int64 so we can index into the cached (max_seq_len, d_k_half) cos/sin tables
         token_positions = token_positions.to(torch.long) # new tensor with dtype = int64 if it is not already the case else return the same tensor
 
-        cos = self.cos_cached[token_positions]   # (..., seq_len, d_k//2)
-        sin = self.sin_cached[token_positions]   # (..., seq_len, d_k//2)
+        #?dimension: confirm expected broadcasting when token_positions is (seq_len,) but x is (batch, seq_len, d_k). CONFIRMED
+        cos: Float[Tensor, "... seq_len d_k_half"] = self.cos_cached[token_positions]
+        sin: Float[Tensor, "... seq_len d_k_half"] = self.sin_cached[token_positions]
 
-        x_even = x[..., 0::2]
-        x_odd  = x[..., 1::2]
+        x_even: Float[Tensor, "... seq_len d_k_half"] = x[..., 0::2]
+        x_odd: Float[Tensor, "... seq_len d_k_half"]  = x[..., 1::2]
 
-        out = torch.empty_like(x)
+        out: Float[Tensor, "... seq_len d_k"] = torch.empty_like(x)
         out[..., 0::2] = x_even * cos - x_odd * sin
         out[..., 1::2] = x_even * sin + x_odd * cos
-        return out
+        return out # (... seq_len d_k)
 
 
 class Softmax(nn.Module):
@@ -236,57 +239,58 @@ class Softmax(nn.Module):
     
 
 class scaled_dot_product_attention(nn.Module):
-    Q: Float[Tensor, "batch_size ... seq_len d_k"] # queries
-    K: Float[Tensor, "batch_size ... seq_len d_k"] # key
-    V: Float[Tensor, "batch_size ... seq_len d_v"] # values
-    Mask: Float[Tensor, "seq_len seq_len"]
-    def __init__(self, mask: Tensor | None=None):
+    def __init__(self, mask: Float[Tensor, "seq_len seq_len"] | None = None, device: torch.device | None = None):
         super().__init__()
-        self.mask = mask 
+        self.mask = mask.to(device=device) if mask is not None else None
 
-    def forward(self, Q:torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> Float[Tensor, "... seq_len d_v"]:
+    def forward(self, Q:Float[Tensor, "... seq_len d_k"], K:Float[Tensor, "... seq_len d_k"], V: Float[Tensor, "... seq_len d_v"]) -> Float[Tensor, "... seq_len d_v"]:
+        #?dimension: Q (..., queries, d_k), K (..., keys, d_k), V (..., keys, d_v); output (..., queries, d_v)? CONFIRMED
         d_k = Q.shape[-1]
         softmax = Softmax(dim=-1)
         score = (Q @ K.transpose(-2,-1)) / math.sqrt(d_k) 
         if self.mask is None:
             QK_compute = softmax(score)
         else:
+            #?dimension: confirm mask shape is broadcastable to score (..., queries, keys).
+            #?device: confirm self.mask is always on same device as score. CONFIRMED
             score = score.masked_fill(self.mask==0, -1e4) #1/True = keep, 0/False = block, we can either use -torch.inf or -1e9 or -1e4 or torch.finfo(score.dtype).min
             QK_compute = softmax(score)
         return QK_compute @ V
     
 
 class multihead_self_attention(nn.Module):
-    def __init__(self, d_model: int,  num_heads, bias = False ):
+    def __init__(self, d_model: int,  num_heads, bias = False, device: torch.device | None = None ):
         super().__init__()
         self.d_model   = d_model
         self.num_heads = num_heads
         self.d_k = self.d_v= d_model // num_heads
-        self.q_proj = Linear(d_model, d_model, bias=bias)
-        self.k_proj = Linear(d_model, d_model, bias=bias)
-        self.v_proj = Linear(d_model, d_model, bias=bias)
-        self.o_proj = Linear(d_model, d_model, bias=bias)
+        self.q_proj = Linear(d_model, d_model, bias=bias,device=device)
+        self.k_proj = Linear(d_model, d_model, bias=bias, device=device)
+        self.v_proj = Linear(d_model, d_model, bias=bias, device=device)
+        self.o_proj = Linear(d_model, d_model, bias=bias, device=device)
 
     def forward(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
         mask = torch.tril(torch.ones((seq_len,seq_len), dtype=torch.bool, device = x.device))
         sdpa = scaled_dot_product_attention(mask)
-        
-        Q = self.q_proj(x)
-        K = self.k_proj(x)
-        V = self.v_proj(x)
+
+        # d_k = d_model//num_heads        
+        Q:Float[Tensor, "... seq_len d_model"] = self.q_proj(x)
+        K:Float[Tensor, "... seq_len d_model"] = self.k_proj(x)
+        V:Float[Tensor, "... seq_len d_model"] = self.v_proj(x)
 
 
-        Q_head = torch.split(Q, int(self.d_k), dim=-1)
-        K_head = torch.split(K, int(self.d_k), dim=-1)
-        V_head = torch.split(V, int(self.d_v), dim=-1)
+        Q_head:tuple[Float[Tensor, "... seq_len d_k"], ...] = torch.split(Q, int(self.d_k), dim=-1) # torch.split return tuple
+        K_head:tuple[Float[Tensor, "... seq_len d_k"], ...] = torch.split(K, int(self.d_k), dim=-1)
+        V_head:tuple[Float[Tensor, "... seq_len d_k"], ...] = torch.split(V, int(self.d_v), dim=-1)
         
         heads = []
 
         for q_h,k_h,v_h in zip(Q_head, K_head, V_head):
             if rope is not None and token_positions is not None:
-                q_h = rope(q_h, token_positions)
-                k_h = rope(k_h, token_positions)
+                #?dimension: token_positions contract here should be (..., seq_len) matching q_h/k_h leading dims.
+                q_h:Float[Tensor, "... seq_len d_k"]= rope(q_h, token_positions) 
+                k_h:Float[Tensor, "... seq_len d_k"] = rope(k_h, token_positions)
             heads.append(sdpa(q_h, k_h, v_h))
 
             
@@ -351,22 +355,26 @@ class transformer_block(nn.Module):
                 d_ff:int, 
                 theta: float | None = None,
                 max_seq_len: int | None = None,
-                bias = False
+                bias = False,
+                device : torch.device | None = None,
                 ):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_ff = d_ff 
-        self.rope = RoPE(theta,d_model//num_heads, max_seq_len) if theta is not None and max_seq_len is not None else None
-        self.rmsnorm1 = RMSNorm(d_model)
-        self.rmsnorm2 = RMSNorm(d_model)
-        self.MHA_layer = multihead_self_attention(d_model, num_heads, bias= bias)
-        self.FFN = positionwise_feedforward(d_model=d_model,d_ff=d_ff, bias =bias)
+        self.device = device
+        #?device: should RoPE/RMSNorm/MHA/FFN be constructed on a caller-provided device/dtype?
+        self.rope = RoPE(theta,d_model//num_heads, max_seq_len, device= device) if theta is not None and max_seq_len is not None else None
+        self.rmsnorm1 = RMSNorm(d_model, device= device)
+        self.rmsnorm2 = RMSNorm(d_model, device= device)
+        self.MHA_layer = multihead_self_attention(d_model, num_heads, bias= bias, device= device)
+        self.FFN = positionwise_feedforward(d_model=d_model,d_ff=d_ff, bias =bias, device= device)
 
     
     def forward(self, x: Float[Tensor, "... sequence_length d_model"], token_positions = None):
         if token_positions is None:
             seq_len = x.shape[-2]
+            #?dimension: should default token_positions include batch dim (e.g. (batch, seq_len)) or is (seq_len,) intentional?
             token_positions = torch.arange(seq_len, device=x.device, dtype=torch.long)
         x_norm = self.rmsnorm1(x)
         MHA_attn = self.MHA_layer(x_norm, token_positions=token_positions, rope=self.rope)

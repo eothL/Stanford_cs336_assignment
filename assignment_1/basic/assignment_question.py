@@ -334,7 +334,7 @@ d_ff : 6,400
 
 bias parameter off for every layer 
 number of trainable paramater =                                                 if we add bias parameter
-    Embedding layer : vocab_size * d_model = 50 257 * 1 600 = 80 411 200        + 50 257 (vocab size/num_embedding)
+    Embedding layer : vocab_size * d_model = 50 257 * 1 600 = 80 411 200        
     embedding_dim : dimension of embedding vector = d_model
     Transformer Block : num_layers = 48
         RMSnorm 1: d_model                                  = 1600              + 1600
@@ -361,7 +361,6 @@ number of trainable paramater =                                                 
 if one parameter is represented in single precision floating point meaning FP32 or 32 bits(4 bytes):
 it will require more than 8GB of memory in FP32
 in FP8, we could go down to 2GB of memory.                                                            
-        
                                                             
 """
 
