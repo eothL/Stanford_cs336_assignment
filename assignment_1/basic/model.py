@@ -388,3 +388,7 @@ def cross_entropy(predicted_logits: Float[Tensor, "batch_size vocab_size"], targ
     loss = torch.logsumexp(predicted_logits, dim=-1) - targets_logits
 
     return loss.mean()
+
+def perplexity(losses, m):
+    return torch.exp(sum(losses)/m)
+ 
