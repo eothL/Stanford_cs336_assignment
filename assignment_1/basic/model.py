@@ -7,13 +7,20 @@ import math
 
 
 class Linear(nn.Module):
+    """ 
+    in_feature: final dimension of the input
+    out_features: inal dimension of the output
+    device: torchdevice to store the parameters on 
+    dtype Data type of the parameter
+    bias add bias parameter or not 
+    """
     weight : Float[Tensor, "out_features in_features"]
     bias : Float[Tensor, "out_features"] | None
     def __init__(self, 
                   in_features: int,
                   out_features: int, 
-                  device = None, 
-                  dtype = None, 
+                  device : torch.device | None = None, 
+                  dtype : torch.dtype | None = None, 
                   bias: bool = True):
         super().__init__()
         self.factory_kwargs = {}
@@ -25,23 +32,30 @@ class Linear(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.weight = nn.Parameter(torch.empty((out_features,in_features), **self.factory_kwargs)) 
-        self.bias = nn.Parameter(torch.empty((out_features,), **self.factory_kwargs)) if bias is not None else None
+        self.bias = nn.Parameter(torch.empty((out_features,), **self.factory_kwargs)) if bias is True else None
 
         nn.init.trunc_normal_(self.weight)
-        if self.bias is not None:
+        if self.bias is True:
             nn.init.trunc_normal_(self.bias) 
 
     def forward(self, x:torch.Tensor) -> torch.Tensor:
-        if self.bias is not None:
+        if self.bias is True:
             return x@self.weight.T + self.bias
         else:
             return x@self.weight.T
 
 
 class Embedding(nn.Module):
+    """
+    Args:
+        num_embeddings (int): size of the vocabulary 
+        embedding_dim (int): dimension of the embedding vector ie d_model
+        device (torch.device|None): Device to store the parameters on  
+        dtype (torch.dtype|None): Data type of the parameters
+    """
     def __init__(self, 
-                 num_embeddings:int, # size of the vocabulary 
-                 embedding_dim: int, # dimension of the embedding vector ie d_model
+                 num_embeddings:int,
+                 embedding_dim: int,
                  device = None, 
                  dtype=None):
         super().__init__()
@@ -71,9 +85,9 @@ class RMSNorm(nn.Module):
 
         self.d_model =d_model
         self.eps = eps
-        self.weight = nn.Parameter(torch.empty((d_model,),**self.factory_kwargs))
+        self.weights = nn.Parameter(torch.empty((d_model,),**self.factory_kwargs))
         
-        nn.init.trunc_normal_(self.weight)
+        nn.init.trunc_normal_(self.weights)
 
     def forward(self, x:Float[Tensor, "batch seq_len d_model"])-> torch.Tensor:
         # prevent overflow when applying square to input convert input to float 32
@@ -81,15 +95,11 @@ class RMSNorm(nn.Module):
         x_fp32 =x.to(torch.float32)
         mean_square = x_fp32.pow(2).mean(dim=-1, keepdim=True)
         RMS = torch.rsqrt(mean_square + self.eps) #rsqrt is reverser sqrt 1/sqrt(X)
-        result = x_fp32*self.weight*RMS
+        result = x_fp32*self.weights*RMS
         return result.to(in_dtype) 
     
 
 class positionwise_feedforward(nn.Module):
-    w1_weight : Float[Tensor, " d_ff d_model"]
-    w3_weight : Float[Tensor, "d_ff d_model"]
-    w2_weight : Float[Tensor, "d_model d_ff"]
-
     def __init__(self, d_model: int, d_ff: int | None = None, device= None, dtype = None):
         super().__init__()
         self.factory_kwargs = {}
@@ -100,13 +110,13 @@ class positionwise_feedforward(nn.Module):
 
         self.d_model = d_model
         self.d_ff = d_ff if d_ff is not None else int(((8/3 * d_model)//64)*64) # keep a multiple of 64 to make a good use of the hardware
-        self.w1_weight = nn.Parameter(torch.empty((self.d_ff, self.d_model), **self.factory_kwargs))
-        self.w3_weight = nn.Parameter(torch.empty((self.d_ff, self.d_model), **self.factory_kwargs))
-        self.w2_weight = nn.Parameter(torch.empty((self.d_model, self.d_ff), **self.factory_kwargs))
+        self.w1_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs)
+        self.w3_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs)
+        self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs)
 
-        nn.init.trunc_normal_(self.w1_weight)
-        nn.init.trunc_normal_(self.w2_weight)
-        nn.init.trunc_normal_(self.w3_weight)
+        nn.init.trunc_normal_(self.w1_proj.weight)
+        nn.init.trunc_normal_(self.w2_proj.weight)
+        nn.init.trunc_normal_(self.w3_proj.weight)
     
     @staticmethod
     def SiLU(x:Float[Tensor, "..."])-> Float[Tensor, "..."]:
@@ -117,12 +127,12 @@ class positionwise_feedforward(nn.Module):
         # instead of doing W1@x for column vector we need to do x@W1.T
         # elementwise multiplication
         return torch.mul( 
-            self.SiLU(x @ self.w1_weight.T), 
-            x @ self.w3_weight.T
+            self.SiLU(self.w1_proj(x)), 
+            self.w3_proj(x)
             )
     
     def forward(self,x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
-        return self.SwiGLU(x)@self.w2_weight.T
+        return self.w2_proj(self.SwiGLU(x))
     
 
 class RoPE_full_matrix(nn.Module):
@@ -225,44 +235,120 @@ class scaled_dot_product_attention(nn.Module):
         return QK_compute @ V
     
 
-
 class multihead_self_attention(nn.Module):
     def __init__(self, d_model: int,  num_heads ):
         super().__init__()
         self.d_model   = d_model
         self.num_heads = num_heads
-        self.dk = self.dv= d_model // num_heads
+        self.d_k = self.d_v= d_model // num_heads
+        self.q_proj = Linear(d_model, d_model, bias=False)
+        self.k_proj = Linear(d_model, d_model, bias=False)
+        self.v_proj = Linear(d_model, d_model, bias=False)
+        self.o_proj = Linear(d_model, d_model, bias=False)
 
-    def forward(self,
-                q_proj_weight: Float[Tensor, " d_k d_in"],
-                k_proj_weight: Float[Tensor, " d_k d_in"],
-                v_proj_weight: Float[Tensor, " d_v d_in"],
-                o_proj_weight: Float[Tensor, " d_model d_v"],
-                x: Float[Tensor, " ... seq_len d_in"],
-                token_positions: Int[Tensor, "... seq_len"] | None = None,
-                rope=None,)->Float[Tensor, "... seq_len d_out"]:
-        Q_head = torch.split(q_proj_weight, int(self.dk))
-        K_head = torch.split(k_proj_weight, int(self.dk))
-        V_head = torch.split(v_proj_weight, int(self.dv))
-        multi_head_attn = []
+    def forward(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
-        mask = torch.tril(
-            torch.ones((seq_len,seq_len), dtype=torch.bool, device = x.device)
-            )
+        mask = torch.tril(torch.ones((seq_len,seq_len), dtype=torch.bool, device = x.device))
         sdpa = scaled_dot_product_attention(mask)
+        
+        Q = self.q_proj(x)
+        K = self.k_proj(x)
+        V = self.v_proj(x)
 
-        for q_proj,k_proj,v_proj in zip(Q_head, K_head, V_head):
-            Q: Float[Tensor, "... seq_len d_k_head"]= x @ q_proj.T 
-            K: Float[Tensor, "... seq_len d_k_head"]= x @ k_proj.T 
-            V: Float[Tensor, "... seq_len d_v_head"]= x @ v_proj.T 
+
+        Q_head = torch.split(Q, int(self.d_k), dim=-1)
+        K_head = torch.split(K, int(self.d_k), dim=-1)
+        V_head = torch.split(V, int(self.d_v), dim=-1)
+        
+        heads = []
+
+        for q_h,k_h,v_h in zip(Q_head, K_head, V_head):
             if rope is not None and token_positions is not None:
-                Q = rope(Q, token_positions)
-                K = rope(K, token_positions)
-            attn_h = sdpa(Q, K, V)
-            multi_head_attn.append(attn_h)
+                q_h = rope(q_h, token_positions)
+                k_h = rope(k_h, token_positions)
+            heads.append(sdpa(q_h, k_h, v_h))
 
             
-        multi_head_attn: Float[Tensor, "... seq_len d_model"] = torch.cat(multi_head_attn, dim=-1) 
-        return multi_head_attn  @ o_proj_weight.T    
+        context: Float[Tensor, "... seq_len d_model"] = torch.cat(heads, dim=-1) 
+        return self.o_proj(context)    
 
-     
+
+class transformer_block(nn.Module):
+    """
+    Args:
+    d_model (int): The dimensionality of the Transformer block input.
+    num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
+        evenly divisible by `num_heads`.
+    d_ff (int): Dimensionality of the feed-forward inner layer.
+    max_seq_len (int): Maximum sequence length to pre-cache if your implementation does that.
+    theta (float): RoPE parameter.
+    weights (dict[str, Tensor]):
+        State dict of our reference implementation.
+        The keys of this dictionary are:
+        - `attn.q_proj.weight`
+            The query projections for all `num_heads` attention heads.
+            Shape is (d_model, d_model).
+            The rows are ordered by matrices of shape (num_heads, d_k),
+            so `attn.q_proj.weight == torch.cat([q_heads.0.weight, ..., q_heads.N.weight], dim=0)`.
+        - `attn.k_proj.weight`
+            The key projections for all `num_heads` attention heads.
+            Shape is (d_model, d_model).
+            The rows are ordered by matrices of shape (num_heads, d_k),
+            so `attn.k_proj.weight == torch.cat([k_heads.0.weight, ..., k_heads.N.weight], dim=0)`.
+        - `attn.v_proj.weight`
+            The value projections for all `num_heads` attention heads.
+            Shape is (d_model, d_model).
+            The rows are ordered by matrices of shape (num_heads, d_v),
+            so `attn.v_proj.weight == torch.cat([v_heads.0.weight, ..., v_heads.N.weight], dim=0)`.
+        - `attn.output_proj.weight`
+            Weight of the multi-head self-attention output projection
+            Shape is (d_model, d_model).
+        - `ln1.weight`
+            Weights of affine transform for the first RMSNorm
+            applied in the transformer block.
+            Shape is (d_model,).
+        - `ffn.w1.weight`
+            Weight of the first linear transformation in the FFN.
+            Shape is (d_model, d_ff).
+        - `ffn.w2.weight`
+            Weight of the second linear transformation in the FFN.
+            Shape is (d_ff, d_model).
+        - `ffn.w3.weight`
+            Weight of the third linear transformation in the FFN.
+            Shape is (d_model, d_ff).
+        - `ln2.weight`
+            Weights of affine transform for the second RMSNorm
+            applied in the transformer block.
+            Shape is (d_model,).
+    in_features (Float[Tensor, "batch sequence_length d_model"]):
+        Tensor to run your implementation on.
+    """
+
+    def __init__(self, 
+                d_model:int,
+                num_heads:int, 
+                d_ff:int, 
+                theta: float | None = None,
+                max_seq_len: int | None = None,
+                ):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.rope = RoPE(theta,d_model//num_heads, max_seq_len) if theta is not None and max_seq_len is not None else None
+        self.rmsnorm1 = RMSNorm(d_model)
+        self.rmsnorm2 = RMSNorm(d_model)
+        self.MHA_layer = multihead_self_attention(d_model, num_heads)
+        self.FFN = positionwise_feedforward(d_model=d_model,d_ff=d_ff)
+
+    
+    def forward(self, x: Float[Tensor, "... sequence_length d_model"], token_positions = None):
+        if token_positions is None:
+            seq_len = x.shape[-2]
+            token_positions = torch.arange(seq_len, device=x.device, dtype=torch.long)
+        x_norm = self.rmsnorm1(x)
+        MHA_attn = self.MHA_layer(x_norm, token_positions=token_positions, rope=self.rope)
+        h = x + MHA_attn
+        h_norm = self.rmsnorm2(h)
+
+        return  self.FFN(h_norm) + h

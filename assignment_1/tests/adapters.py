@@ -92,21 +92,20 @@ def run_swiglu(
     from basic.model import positionwise_feedforward
     layer = positionwise_feedforward(d_model=d_model, d_ff=d_ff)
 
-    """
-    instead of doing layer.w1_weight = w1_weight
-    we use .copy_
-    1. It keeps the original registered nn.Parameter objects intact.
-    2. It avoids re-registering/replacing parameters (cleaner module state).
-    3. It preserves device/dtype/layout choices from construction.
-    4. It’s the standard way to load known tensor values into an existing module.
-    """
-
     with torch.no_grad():
-        layer.w1_weight.copy_(w1_weight)
-        layer.w2_weight.copy_(w2_weight)
-        layer.w3_weight.copy_(w3_weight)
+        layer.w1_proj.weight.copy_(w1_weight)
+        layer.w2_proj.weight.copy_(w2_weight)
+        layer.w3_proj.weight.copy_(w3_weight)
 
-    return layer.forward(in_features)
+    return layer(in_features)
+"""
+instead of doing layer.w1_weight = w1_weight
+we use .copy_
+1. It keeps the original registered nn.Parameter objects intact.
+2. It avoids re-registering/replacing parameters (cleaner module state).
+3. It preserves device/dtype/layout choices from construction.
+4. It’s the standard way to load known tensor values into an existing module.
+"""
 
 
 def run_scaled_dot_product_attention(
@@ -165,7 +164,12 @@ def run_multihead_self_attention(
     """
     from basic.model import multihead_self_attention as MHA
     layer = MHA(d_model=d_model, num_heads=num_heads)
-    return layer(q_proj_weight, k_proj_weight, v_proj_weight, o_proj_weight, in_features)
+    with torch.no_grad():
+      layer.q_proj.weight.copy_(q_proj_weight)
+      layer.k_proj.weight.copy_(k_proj_weight)
+      layer.v_proj.weight.copy_(v_proj_weight)
+      layer.o_proj.weight.copy_(o_proj_weight)
+    return layer(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -206,9 +210,15 @@ def run_multihead_self_attention_with_rope(
         implementation with the given QKV projection weights and input features.
     """
     from basic.model import multihead_self_attention, RoPE
-    MHA = multihead_self_attention(d_model=d_model, num_heads=num_heads)
+    layer = multihead_self_attention(d_model=d_model, num_heads=num_heads)
     rope = RoPE(theta=theta, d_k=d_model//num_heads,max_seq_len=max_seq_len,device=in_features.device)
-    return MHA(q_proj_weight, k_proj_weight, v_proj_weight, o_proj_weight, in_features, token_positions, rope)
+    with torch.no_grad():
+      layer.q_proj.weight.copy_(q_proj_weight)
+      layer.k_proj.weight.copy_(k_proj_weight)
+      layer.v_proj.weight.copy_(v_proj_weight)
+      layer.o_proj.weight.copy_(o_proj_weight)
+
+    return layer(in_features, token_positions, rope)
 
 def run_rope(
     d_k: int,
@@ -305,7 +315,20 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    from basic.model import transformer_block, Embedding
+    block = transformer_block(d_model=d_model, num_heads=num_heads, d_ff=d_ff, theta=theta, max_seq_len=max_seq_len)
+    embedding = Embedding()
+    with torch.no_grad():
+        block.rmsnorm1.weights.copy_(weights["ln1.weight"])
+        block.rmsnorm2.weights.copy_(weights["ln2.weight"])
+        block.MHA_layer.q_proj.weight.copy_(weights["attn.q_proj.weight"])
+        block.MHA_layer.k_proj.weight.copy_(weights["attn.k_proj.weight"])
+        block.MHA_layer.v_proj.weight.copy_(weights["attn.v_proj.weight"])
+        block.FFN.w1_weight.copy_(weights["ffn.w1.weight"])
+        block.FFN.w2_weight.copy_(weights["ffn.w2.weight"])
+        block.FFN.w3_weight.copy_(weights["ffn.w3.weight"])
+        
+    return block(in_features)
 
 
 def run_transformer_lm(
