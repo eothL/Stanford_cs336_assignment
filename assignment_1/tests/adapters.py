@@ -29,8 +29,7 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
     from basic.model import Linear
-    layer = Linear(d_in, d_out, bias=False)
-    #?device: should `layer` be initialized on `in_features.device` to avoid CPU/GPU mismatch?
+    layer = Linear(d_in, d_out, bias=False, device=in_features.device)
     layer.weight = torch.nn.Parameter(weights)
     return layer.forward(in_features)
 
@@ -56,8 +55,8 @@ def run_embedding(
     from basic.model import Embedding
     embedding_layer = Embedding(num_embeddings=vocab_size,
                                 embedding_dim= d_model,
+                                device=token_ids.device,
                                 )
-    #?device: should `embedding_layer` be initialized on `token_ids.device` (or weights.device)?
     embedding_layer.weight = torch.nn.Parameter(weights)
     return embedding_layer.forward(token_ids)
     
@@ -93,7 +92,6 @@ def run_swiglu(
     # swiglu.w3.weight.data = w3_weight
     from basic.model import positionwise_feedforward
     layer = positionwise_feedforward(d_model=d_model, d_ff=d_ff, device= in_features.device)
-    #?device: should `layer` be initialized on `in_features.device` before weight copy? CONFIRMED
 
     with torch.no_grad():
         layer.w1_proj.weight.copy_(w1_weight)
@@ -130,7 +128,6 @@ def run_scaled_dot_product_attention(
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
     from basic.model import scaled_dot_product_attention
-    #?device: if `mask` is passed on CPU and Q/K/V are on GPU, should mask be moved inside adapter?
     layer = scaled_dot_product_attention(mask= mask.to(device=Q.device) if mask is not None else None)
     return layer(Q,K,V)
 
@@ -321,8 +318,15 @@ def run_transformer_block(
         running the Transformer block on the input features while using RoPE.
     """
     from basic.model import transformer_block
-    block = transformer_block(d_model=d_model, num_heads=num_heads, d_ff=d_ff, theta=theta, max_seq_len=max_seq_len, bias = False)
-    #?device: should `block` be initialized on `in_features.device` before loading weights?
+    block = transformer_block(
+        d_model=d_model,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        theta=theta,
+        max_seq_len=max_seq_len,
+        bias=False,
+        device=in_features.device,
+    )
     with torch.no_grad():
         block.rmsnorm1.weights.copy_(weights["ln1.weight"])
         block.rmsnorm2.weights.copy_(weights["ln2.weight"])
@@ -420,7 +424,6 @@ def run_transformer_lm(
     embedding_layer = Embedding(num_embeddings= vocab_size, embedding_dim= d_model, device= in_indices.device)
     rmsn_layer = RMSNorm(d_model=d_model, device= in_indices.device)
     linear_layer = Linear(d_model, vocab_size, bias= False, device= in_indices.device)
-    #?device: should top-level modules be initialized on `in_indices.device`? CONFIRMED
     with torch.no_grad():
         embedding_layer.weight.copy_(weights["token_embeddings.weight"])
         rmsn_layer.weights.copy_(weights["ln_final.weight"])
@@ -433,7 +436,6 @@ def run_transformer_lm(
                                   theta = rope_theta,
                                   max_seq_len= context_length,
                                   device= in_indices.device)
-        #?device: should each block be moved/created on x.device before parameter copy? CONFIRMED
         with torch.no_grad():
             block.rmsnorm1.weights.copy_(weights[f"layers.{i}.ln1.weight"])
             block.rmsnorm2.weights.copy_(weights[f"layers.{i}.ln2.weight"])
@@ -474,7 +476,6 @@ def run_rmsnorm(
     """
     from basic.model import RMSNorm
     RMSNorm_layer = RMSNorm(d_model=d_model, eps=eps, device= in_features.device)
-    #?dimension: confirm the module parameter name is `weight` (singular) in your RMSNorm implementation. CONFIRMED
     with torch.no_grad():
         RMSNorm_layer.weights.copy_(weights)
     return RMSNorm_layer.forward(in_features)
