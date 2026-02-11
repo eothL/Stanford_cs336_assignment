@@ -442,8 +442,6 @@ def run_transformer_lm(
         x = block(x)
 
     return linear_layer(rmsn_layer(x))
-    
-
 
 
 def run_rmsnorm(
