@@ -315,18 +315,18 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    from basic.model import transformer_block, Embedding
-    block = transformer_block(d_model=d_model, num_heads=num_heads, d_ff=d_ff, theta=theta, max_seq_len=max_seq_len)
-    embedding = Embedding()
+    from basic.model import transformer_block
+    block = transformer_block(d_model=d_model, num_heads=num_heads, d_ff=d_ff, theta=theta, max_seq_len=max_seq_len, bias = False)
     with torch.no_grad():
         block.rmsnorm1.weights.copy_(weights["ln1.weight"])
         block.rmsnorm2.weights.copy_(weights["ln2.weight"])
         block.MHA_layer.q_proj.weight.copy_(weights["attn.q_proj.weight"])
         block.MHA_layer.k_proj.weight.copy_(weights["attn.k_proj.weight"])
         block.MHA_layer.v_proj.weight.copy_(weights["attn.v_proj.weight"])
-        block.FFN.w1_weight.copy_(weights["ffn.w1.weight"])
-        block.FFN.w2_weight.copy_(weights["ffn.w2.weight"])
-        block.FFN.w3_weight.copy_(weights["ffn.w3.weight"])
+        block.MHA_layer.o_proj.weight.copy_(weights["attn.output_proj.weight"])
+        block.FFN.w1_proj.weight.copy_(weights["ffn.w1.weight"])
+        block.FFN.w2_proj.weight.copy_(weights["ffn.w2.weight"])
+        block.FFN.w3_proj.weight.copy_(weights["ffn.w3.weight"])
         
     return block(in_features)
 

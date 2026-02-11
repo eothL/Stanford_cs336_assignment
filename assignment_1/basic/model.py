@@ -75,6 +75,13 @@ class Embedding(nn.Module):
 
 
 class RMSNorm(nn.Module):
+    """
+    Args:
+        d_model (int): Hidden dimension of the model
+        eps (float): Epsilon value for stability
+        device (torch.device|None): Device to store the parameters on  
+        dtype (torch.dtype|None): Data type of the parameters
+    """
     def __init__(self, d_model: int, eps:float = 1e-5, device= None, dtype=None):
         super().__init__()
         self.factory_kwargs = {}
@@ -100,7 +107,7 @@ class RMSNorm(nn.Module):
     
 
 class positionwise_feedforward(nn.Module):
-    def __init__(self, d_model: int, d_ff: int | None = None, device= None, dtype = None):
+    def __init__(self, d_model: int, d_ff: int | None = None, device= None, dtype = None, bias = False):
         super().__init__()
         self.factory_kwargs = {}
         if device is not None:
@@ -110,9 +117,9 @@ class positionwise_feedforward(nn.Module):
 
         self.d_model = d_model
         self.d_ff = d_ff if d_ff is not None else int(((8/3 * d_model)//64)*64) # keep a multiple of 64 to make a good use of the hardware
-        self.w1_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs)
-        self.w3_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs)
-        self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs)
+        self.w1_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs, bias=bias)
+        self.w3_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs, bias=bias)
+        self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
 
         nn.init.trunc_normal_(self.w1_proj.weight)
         nn.init.trunc_normal_(self.w2_proj.weight)
@@ -133,10 +140,17 @@ class positionwise_feedforward(nn.Module):
     
     def forward(self,x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
         return self.w2_proj(self.SwiGLU(x))
-    
+        
 
 class RoPE_full_matrix(nn.Module):
-    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+    """
+    Args:
+        theta (float): Angle value for the RoPE
+        d_k (int): dimension of query and key vector
+        max_seq_len (int): maximum sequence length that will be inputted
+        device (torch.device|None): Device to store the buffer on
+    """
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device: torch.device | None = None):
         super().__init__()
         assert d_k% 2 ==0 
 
@@ -167,10 +181,13 @@ class RoPE_full_matrix(nn.Module):
         return y.squeeze(-1) #(..., seq_len, d_k)
 
 class RoPE(nn.Module):
-    # theta: value for the RoPE
-    # d_k: dimension of query and key vectors
-    # maximum sequence length that will be inputted
-    # device to store the buffer on
+    """
+    Args:
+        theta (float): Angle value for the RoPE
+        d_k (int): dimension of query and key vector
+        max_seq_len (int): maximum sequence length that will be inputted
+        device (torch.device|None): Device to store the buffer on
+    """
     def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
         super().__init__()
         assert d_k% 2 ==0 
@@ -203,8 +220,12 @@ class RoPE(nn.Module):
 
 
 class Softmax(nn.Module):
-    # d_i : a dimension i and apply softmax to the i-th dimension of the input tensor
-    # For numerical stability, we will substract the largest value in the input tensor as softmax operation is invariant to adding any constant c to all inputs
+    """
+    Args:
+        d_i (int): a dimension i and apply softmax to the i-th dimension of the input tensor
+    For numerical stability, we will substract the largest value in the input tensor as softmax operation is invariant to adding any constant c to all inputs
+    """
+    
     def __init__(self, dim: int):
         super().__init__()
         self.d_i = dim
@@ -236,15 +257,15 @@ class scaled_dot_product_attention(nn.Module):
     
 
 class multihead_self_attention(nn.Module):
-    def __init__(self, d_model: int,  num_heads ):
+    def __init__(self, d_model: int,  num_heads, bias = False ):
         super().__init__()
         self.d_model   = d_model
         self.num_heads = num_heads
         self.d_k = self.d_v= d_model // num_heads
-        self.q_proj = Linear(d_model, d_model, bias=False)
-        self.k_proj = Linear(d_model, d_model, bias=False)
-        self.v_proj = Linear(d_model, d_model, bias=False)
-        self.o_proj = Linear(d_model, d_model, bias=False)
+        self.q_proj = Linear(d_model, d_model, bias=bias)
+        self.k_proj = Linear(d_model, d_model, bias=bias)
+        self.v_proj = Linear(d_model, d_model, bias=bias)
+        self.o_proj = Linear(d_model, d_model, bias=bias)
 
     def forward(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
@@ -330,16 +351,17 @@ class transformer_block(nn.Module):
                 d_ff:int, 
                 theta: float | None = None,
                 max_seq_len: int | None = None,
+                bias = False
                 ):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
-        self.d_ff = d_ff
+        self.d_ff = d_ff 
         self.rope = RoPE(theta,d_model//num_heads, max_seq_len) if theta is not None and max_seq_len is not None else None
         self.rmsnorm1 = RMSNorm(d_model)
         self.rmsnorm2 = RMSNorm(d_model)
-        self.MHA_layer = multihead_self_attention(d_model, num_heads)
-        self.FFN = positionwise_feedforward(d_model=d_model,d_ff=d_ff)
+        self.MHA_layer = multihead_self_attention(d_model, num_heads, bias= bias)
+        self.FFN = positionwise_feedforward(d_model=d_model,d_ff=d_ff, bias =bias)
 
     
     def forward(self, x: Float[Tensor, "... sequence_length d_model"], token_positions = None):
