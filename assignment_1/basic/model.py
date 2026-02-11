@@ -373,3 +373,22 @@ class transformer_block(nn.Module):
         h_norm = self.rmsnorm2(h)
 
         return  self.FFN(h_norm) + h
+
+
+def cross_entropy(predicted_logits: Float[Tensor, "batch_size vocab_size"], targets: Int[Tensor, "batch_size"]) -> Float[Tensor, ""]:
+    """
+    Substract the largest element for numerical stability
+    cancel out log and exp whenever possible 
+    Args:
+        o_i (float): predicted logits 
+        x_i+1 (int): targets, next id token 
+    """
+    batch_size = predicted_logits.shape[0]
+    loss = torch.empty((batch_size,)).to(device=predicted_logits.device)
+
+    for i in range (batch_size):
+        all_logits = torch.logsumexp(predicted_logits[i], dim=-1) # Use this function as it uses the tricks of subtracting maximum value
+        logit_target = predicted_logits[i, targets[i]]
+        loss[i]= all_logits - logit_target
+
+    return loss.mean(dim=-1)
