@@ -220,6 +220,7 @@ def run_multihead_self_attention_with_rope(
 
     return layer(in_features, token_positions, rope)
 
+
 def run_rope(
     d_k: int,
     theta: float,
@@ -410,7 +411,39 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    from basic.model import Embedding, transformer_block, RMSNorm, Linear
+    embedding_layer = Embedding(num_embeddings= vocab_size, embedding_dim= d_model)
+    rmsn_layer = RMSNorm(d_model=d_model)
+    linear_layer = Linear(d_model, vocab_size, bias= False)
+    with torch.no_grad():
+        embedding_layer.weight.copy_(weights["token_embeddings.weight"])
+        rmsn_layer.weights.copy_(weights["ln_final.weight"])
+        linear_layer.weight.copy_(weights["lm_head.weight"])
+    blocks= []
+    for i in range(num_layers):
+        block = transformer_block(d_model = d_model,
+                                  num_heads = num_heads,
+                                  d_ff = d_ff,
+                                  theta = rope_theta,
+                                  max_seq_len= context_length)
+        with torch.no_grad():
+            block.rmsnorm1.weights.copy_(weights[f"layers.{i}.ln1.weight"])
+            block.rmsnorm2.weights.copy_(weights[f"layers.{i}.ln2.weight"])
+            block.MHA_layer.q_proj.weight.copy_(weights[f"layers.{i}.attn.q_proj.weight"])
+            block.MHA_layer.k_proj.weight.copy_(weights[f"layers.{i}.attn.k_proj.weight"])
+            block.MHA_layer.v_proj.weight.copy_(weights[f"layers.{i}.attn.v_proj.weight"])
+            block.MHA_layer.o_proj.weight.copy_(weights[f"layers.{i}.attn.output_proj.weight"])
+            block.FFN.w1_proj.weight.copy_(weights[f"layers.{i}.ffn.w1.weight"])
+            block.FFN.w2_proj.weight.copy_(weights[f"layers.{i}.ffn.w2.weight"])
+            block.FFN.w3_proj.weight.copy_(weights[f"layers.{i}.ffn.w3.weight"])
+        blocks.append(block)
+    x = embedding_layer(in_indices)
+    for block in blocks:
+        x = block(x)
+
+    return linear_layer(rmsn_layer(x))
+    
+
 
 
 def run_rmsnorm(
