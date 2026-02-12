@@ -14,31 +14,31 @@ This assignment provides hands-on experience with the fundamental building block
 - prefer `python` (not `python3`) and use `uv` for package management.
 
 ### Key code:
-- `basic/` folder contains all the code wrote from scratch by the USER
-- `basic/Tokenizer.py`: tokenizer class (currently stubs).
-- `basic/train_bpe.py`: main BPE training logic (heap-based).
-- `basic/pretokenization.py`: chunking + multiprocessing pretokenization.
-- `basic/assigment_question.py`: script to answer assignment question.
-- `tests/`: contains all the test file
-- `tests/adapters.py`: required functions (test targets).
-- `local/`: for more experiment
+- `basic/model.py`: core NN/transformer implementations (Linear, Embedding, RMSNorm, RoPE, SDPA, MHA, transformer block/LM, loss, optimizer pieces).
+- `tests/adapters.py`: required adapter entry points for the assignment tests (main implementation targets).
+- `basic/Tokenizer.py`: BPE tokenizer class (`encode`/`decode`, merge application, special token handling).
+- `basic/train_bpe.py`: main BPE training pipeline (heap-based merge selection and vocab/merge construction).
+- `basic/pretokenization.py`: corpus chunking + multiprocessing pretokenization/counting.
+- `basic/bytes_utils.py`: byte-level helper utilities used in tokenizer/BPE workflow.
+- `basic/assignment_question.py`: assignment-specific analysis/answers and related experiments.
+- `tests/test_model.py`, `tests/test_nn_utils.py`, `tests/test_optimizer.py`, `tests/test_serialization.py`, `tests/test_tokenizer.py`, `tests/test_train_bpe.py`, `tests/test_data.py`: primary test suites.
+- `tests/fixtures/` and `tests/_snapshots/`: reference assets and expected outputs for tests.
+- `local/`: scratch space for experiments and debugging scripts.
 
-### Progress so far (Theo + prior agents):
-- Implemented pretokenization for the BPE algorithm in `basic/pretokenization.py`:
-  - Using parallelism to speed up the process.
-  - pattern excludes the split token; token counted explicitly.
-- Implemented and tested the train_bpe algorithm in `basic/train_bpe` with the function `train_bpe_heap()`:
-  - Leveraging heap structure to find the best pair of bytes instead of max() function. Not using heapq library. 
-  - Missing how to save the vocab and merge list to reuse after.
-- Finishing `basic/assignment_question.py` to answer question.
-- Started implementing the Tokenizer class in.
+### Progress so far (Theo + prior agents, from `State/.ai/logs/diary.md` in the last 7 days: 2026-02-09 to 2026-02-12):
+- 2026-02-12: focused on transformer-core completion (RoPE, SDPA, MHA, transformer block, LM wiring, and cross-entropy reasoning); resolved several adapter/model weight-loading and boundary-contract issues.
+- 2026-02-11: deep debugging pass on RoPE + MHA + TransformerBlock; fixed conceptual and implementation issues around Q/K handling, causal masking, and module-vs-parameter `copy_` usage.
+- 2026-02-10: clarified causal self-attention pipeline correctness (`Q/K/V`, `W_O`, and lower-triangular masking semantics), with emphasis on shape contracts for vectorized implementation.
+- 2026-02-09: cleaned and clarified AGENTS-level instruction precedence and workflow behavior.
+- Current risk captured in logs: integration drift from inconsistent naming/key mapping across adapters and model modules.
+- Remaining open adapter tasks (confirmed by current `NotImplementedError` stubs): `run_get_batch`, `run_gradient_clipping`, `run_get_lr_cosine_schedule`, `run_save_checkpoint`, `run_load_checkpoint`.
 
 ## Core Tasks
-✅:done/🟡: currently doing
+✅: done / 🟡: currently doing / ⬜: not started
 
 ### 1. **Basic Neural Network Components**
 
-#### Linear Layer (`run_linear`)
+#### Linear Layer (`run_linear`) ✅
 - **Task**: Implement a linear transformation layer
 - **Parameters**: 
   - `d_in`: Input dimension size
@@ -47,7 +47,7 @@ This assignment provides hands-on experience with the fundamental building block
   - `in_features`: Input tensor of shape `(..., d_in)`
 - **Goal**: Apply matrix multiplication to transform input features
 
-#### Embedding Layer (`run_embedding`)
+#### Embedding Layer (`run_embedding`) ✅
 - **Task**: Implement token embedding lookup
 - **Parameters**:
   - `vocab_size`: Number of vocabulary items
@@ -56,7 +56,7 @@ This assignment provides hands-on experience with the fundamental building block
   - `token_ids`: Token indices to look up
 - **Goal**: Retrieve embeddings for given token IDs
 
-#### RMSNorm (`run_rmsnorm`)
+#### RMSNorm (`run_rmsnorm`) ✅
 - **Task**: Implement Root Mean Square Layer Normalization
 - **Parameters**:
   - `d_model`: Input dimension
@@ -65,14 +65,14 @@ This assignment provides hands-on experience with the fundamental building block
   - `in_features`: Input tensor
 - **Goal**: Normalize inputs using RMS normalization
 
-#### SiLU Activation (`run_silu`)
+#### SiLU Activation (`run_silu`) ✅
 - **Task**: Implement Swish/SiLU activation function
 - **Formula**: `x * sigmoid(x)`
 - **Goal**: Apply element-wise SiLU activation
 
 ### 2. **Attention Mechanisms**
 
-#### Scaled Dot Product Attention (`run_scaled_dot_product_attention`)
+#### Scaled Dot Product Attention (`run_scaled_dot_product_attention`) ✅
 - **Task**: Implement the core attention mechanism
 - **Parameters**:
   - `Q`: Query tensor
@@ -81,7 +81,7 @@ This assignment provides hands-on experience with the fundamental building block
   - `mask`: Optional attention mask
 - **Goal**: Compute attention weights and apply to values
 
-#### Multi-Head Self-Attention (`run_multihead_self_attention`)
+#### Multi-Head Self-Attention (`run_multihead_self_attention`) ✅
 - **Task**: Implement multi-head attention without RoPE
 - **Parameters**:
   - `d_model`: Model dimension
@@ -89,7 +89,7 @@ This assignment provides hands-on experience with the fundamental building block
   - Projection weights for Q, K, V, and output
 - **Goal**: Apply multi-head attention with batched operations
 
-#### Multi-Head Self-Attention with RoPE (`run_multihead_self_attention_with_rope`)
+#### Multi-Head Self-Attention with RoPE (`run_multihead_self_attention_with_rope`) ✅
 - **Task**: Implement multi-head attention with Rotary Position Embedding
 - **Additional Parameters**:
   - `max_seq_len`: Maximum sequence length
@@ -97,7 +97,7 @@ This assignment provides hands-on experience with the fundamental building block
   - `token_positions`: Position indices
 - **Goal**: Apply RoPE to queries and keys before attention
 
-#### RoPE Implementation (`run_rope`)
+#### RoPE Implementation (`run_rope`) ✅
 - **Task**: Implement Rotary Position Embedding
 - **Parameters**:
   - `d_k`: Key/query dimension
@@ -109,7 +109,7 @@ This assignment provides hands-on experience with the fundamental building block
 
 ### 3. **Feed-Forward Networks**
 
-#### SwiGLU (`run_swiglu`)
+#### SwiGLU (`run_swiglu`) ✅
 - **Task**: Implement SwiGLU feed-forward network
 - **Parameters**:
   - `d_model`: Input/output dimension
@@ -120,7 +120,7 @@ This assignment provides hands-on experience with the fundamental building block
 
 ### 4. **Transformer Architecture**
 
-#### Transformer Block (`run_transformer_block`)
+#### Transformer Block (`run_transformer_block`) ✅
 - **Task**: Implement a complete transformer block
 - **Components**:
   - Multi-head self-attention with RoPE
@@ -128,7 +128,7 @@ This assignment provides hands-on experience with the fundamental building block
   - RMSNorm layers
 - **Goal**: Process input through one transformer layer
 
-#### Transformer Language Model (`run_transformer_lm`)
+#### Transformer Language Model (`run_transformer_lm`) ✅
 - **Task**: Implement full transformer language model
 - **Components**:
   - Token embeddings
@@ -137,9 +137,9 @@ This assignment provides hands-on experience with the fundamental building block
   - Language modeling head
 - **Goal**: Generate logits for next token prediction
 
-### 5. **Training Infrastructure**
+### 5. **Training Infrastructure** 🟡
 
-#### Data Loading (`run_get_batch`)
+#### Data Loading (`run_get_batch`) ⬜
 - **Task**: Sample training batches from dataset
 - **Parameters**:
   - `dataset`: 1D array of token IDs
@@ -149,13 +149,13 @@ This assignment provides hands-on experience with the fundamental building block
 - **Goal**: Create input sequences and corresponding labels
 
 #### Loss Functions
-- **Softmax** (`run_softmax`): Implement softmax with numerical stability
-- **Cross-Entropy** (`run_cross_entropy`): Compute cross-entropy loss
-- **Gradient Clipping** (`run_gradient_clipping`): Clip gradients by L2 norm
+- **Softmax** (`run_softmax`) ✅: Implement softmax with numerical stability
+- **Cross-Entropy** (`run_cross_entropy`) ✅: Compute cross-entropy loss
+- **Gradient Clipping** (`run_gradient_clipping`) ⬜: Clip gradients by L2 norm
 
-### 6. **Optimization**
+### 6. **Optimization** 🟡
 
-#### AdamW Optimizer (`get_adamw_cls`)
+#### AdamW Optimizer (`get_adamw_cls`) 🟡
 - **Task**: Implement AdamW optimizer from scratch
 - **Features**:
   - Momentum (β1) and RMSprop (β2) terms
@@ -163,7 +163,7 @@ This assignment provides hands-on experience with the fundamental building block
   - Bias correction
 - **Goal**: Provide efficient optimization for transformer training
 
-#### Learning Rate Scheduling (`run_get_lr_cosine_schedule`)
+#### Learning Rate Scheduling (`run_get_lr_cosine_schedule`) ⬜
 - **Task**: Implement cosine learning rate schedule with warmup
 - **Parameters**:
   - `max_learning_rate`: Peak learning rate
@@ -172,9 +172,9 @@ This assignment provides hands-on experience with the fundamental building block
   - `cosine_cycle_iters`: Cosine cycle length
 - **Goal**: Provide learning rate schedule for training
 
-### 7. **Model Serialization**
+### 7. **Model Serialization** ⬜
 
-#### Checkpointing
+#### Checkpointing ⬜
 - **Save** (`run_save_checkpoint`): Serialize model, optimizer, and iteration
 - **Load** (`run_load_checkpoint`): Restore model state from checkpoint
 - **Goal**: Enable training resumption and model persistence
