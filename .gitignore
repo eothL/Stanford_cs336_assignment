@@ -7,7 +7,6 @@
 __pycache__/
 local/
 .DS_store
-
 # uv packages
 .venv/
 .pytest_cache/ 
@@ -15,3 +14,4 @@ uv.lock
 *.egg-info/
 
 .bin
+.log
