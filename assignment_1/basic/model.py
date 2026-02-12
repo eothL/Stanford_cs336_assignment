@@ -365,7 +365,7 @@ class transformer_block(nn.Module):
         self.FFN = positionwise_feedforward(d_model=d_model,d_ff=d_ff, bias =bias, device= device)
 
     
-    def forward(self, x: Float[Tensor, "... sequence_length d_model"], token_positions = None):
+    def forward(self, x: Float[Tensor, "... sequence_length d_model"], token_positions = None)->Float[Tensor, "... sequence_length d_model"]:
         if token_positions is None:
             seq_len = x.shape[-2]
             token_positions = torch.arange(seq_len, device=x.device, dtype=torch.long)
