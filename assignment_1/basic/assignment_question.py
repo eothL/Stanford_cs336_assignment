@@ -5,7 +5,8 @@ from .train_bpe import train_bpe_heap
 from .pretokenization import count_pretokens_parallel, find_chunk_boundaries
 from .bytes_utils import bytes_to_unicode_text
 from .Tokenizer import Tokenizer
-
+from .model import SGD 
+import torch
 import json 
 import os 
 from pathlib import Path
@@ -16,6 +17,7 @@ import tracemalloc
 import random 
 import numpy as np
 import multiprocessing as mp
+
 
 """train bpe tokenizer on the TinyStories dataset using vocab size of 10 000"""
 
@@ -274,6 +276,19 @@ def serialization_data(data_path, vocab_path, merge_path,dataset, split_tokens_b
 
     return arr 
 
+def learning_rate_tuning(lrs:list):
+    print("start learning rate tuning")
+    for lr in lrs:
+        print(f"lr {lr} test")
+        weights = torch.nn.Parameter(5 * torch.randn((10,10)))
+        opt = SGD([weights], lr =lr)
+
+        for t in range(10):
+            opt.zero_grad() # reset the gradeints for all learnanble paramters
+            loss = (weights**2).mean() # Compute a scalar loss value
+            print(loss.cpu().item())
+            loss.backward() # run backward pass which computes gradients
+            opt.step() # Run optimizer step
 
 if __name__== "__main__":
     special_tokens= ["<|endoftext|>"]   
@@ -295,31 +310,74 @@ if __name__== "__main__":
     split_tokens_bytes = split_tokens[0].encode("utf-8") 
     #tokenizer_experiments(data_folder_path, vocab_path_ts, merge_path_ts, vocab_path_owt, merge_path_owt, split_tokens_bytes, dataset, special_tokens)
     
-    print("serialization of dataset")
-    for data in dataset[::-1]:
-        print(f"serialization of {data}")
-        pr = cProfile.Profile()
-        pr.enable()
-        if data == "tinystories_train.txt" or data == "tinystories_val.txt":
-            serialization_data(data_path=data_folder_path,
-                            vocab_path=vocab_path_ts,
-                            merge_path=merge_path_ts,
-                            dataset=data, 
-                            split_tokens_bytes=split_tokens_bytes,
-                            special_tokens=special_tokens,
-                            artifact_folder_path=artifact_folder_path)
-        else : 
-            serialization_data(data_path=data_folder_path,
-                vocab_path=vocab_path_owt,
-                merge_path=merge_path_owt,
-                dataset=data, 
-                split_tokens_bytes=split_tokens_bytes,
-                special_tokens=special_tokens,
-                artifact_folder_path=artifact_folder_path)
-        pr.disable()
-        result = pstats.Stats(pr)
-        result.sort_stats(pstats.SortKey.TIME)
-        result.print_stats(20)
+    # print("serialization of dataset")
+    # for data in dataset[::-1]:
+    #     print(f"serialization of {data}")
+    #     pr = cProfile.Profile()
+    #     pr.enable()
+    #     if data == "tinystories_train.txt" or data == "tinystories_val.txt":
+    #         serialization_data(data_path=data_folder_path,
+    #                         vocab_path=vocab_path_ts,
+    #                         merge_path=merge_path_ts,
+    #                         dataset=data, 
+    #                         split_tokens_bytes=split_tokens_bytes,
+    #                         special_tokens=special_tokens,
+    #                         artifact_folder_path=artifact_folder_path)
+    #     else : 
+    #         serialization_data(data_path=data_folder_path,
+    #             vocab_path=vocab_path_owt,
+    #             merge_path=merge_path_owt,
+    #             dataset=data, 
+    #             split_tokens_bytes=split_tokens_bytes,
+    #             special_tokens=special_tokens,
+    #             artifact_folder_path=artifact_folder_path)
+    #     pr.disable()
+    #     result = pstats.Stats(pr)
+    #     result.sort_stats(pstats.SortKey.TIME)
+    #     result.print_stats(20)
+
+    learning_rate_tuning([1e1,1e2,1e3])
+
+
+"""
+learning rate
+start learning rate tuning
+lr 10.0 test
+23.419147491455078
+14.98825454711914
+11.048701286315918
+8.644428253173828
+7.001987934112549
+5.805449962615967
+4.896126747131348
+4.183879852294922
+3.6131093502044678
+3.1474196910858154
+lr 100.0 test
+19.997255325317383
+19.99725341796875
+3.4309864044189453
+0.08211121708154678
+1.436719682729309e-16
+1.601313098447264e-18
+5.392185233667183e-20
+3.2121614325484406e-21
+2.7555996891975526e-22
+3.061777747986087e-23
+lr 1000.0 test
+33.50859832763672
+12096.6025390625
+2089273.75
+232409376.0
+18825158656.0
+1188083269632.0
+60992310476800.0
+2624149855928320.0
+9.672056756187955e+16
+3.105805063507935e+18
+
+a higher learning rate can converge faster but also diverge.
+"""
 
 """
 ========================== Transformer LM resource accounting =============================

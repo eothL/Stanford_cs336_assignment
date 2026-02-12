@@ -1,8 +1,10 @@
+import math
 import torch
 import torch.nn as nn
-from jaxtyping import Float, Int
 from torch import Tensor
-import math
+from jaxtyping import Float, Int
+from collections.abc import Callable, Iterable
+from typing import Optional 
 
 
 class Linear(nn.Module):
@@ -392,3 +394,31 @@ def cross_entropy(predicted_logits: Float[Tensor, "batch_size vocab_size"], targ
 def perplexity(losses, m):
     return torch.exp(sum(losses)/m)
  
+class SGD(torch.optim.Optimizer):
+    def __init__(self, params, lr = 1e-3):
+        assert lr > 0
+        defaults = {"lr": lr}
+        super().__init__(params, defaults)
+        
+
+    def step(self, closure: Optional[Callable]= None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr = group["lr"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+
+                state = self.state[p] # Get state associated with p
+                t = state.get("t", 0) # get iteration number from the state, or initial value
+                grad = p.grad.data    # get the gradient of the loss with respect to p
+                p.data -= lr/ math.sqrt(t+1) * grad # udpate weight tensor in-place
+                state["t"] = t+1  # Increament iteration number
+        return loss
+    
+
+
+class AdamW(torch.optim.Optimizer):
+    def __init__(self, params, defaults):
+        super().__init__(params, defaults)
+        
