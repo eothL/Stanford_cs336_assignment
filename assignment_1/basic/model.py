@@ -97,7 +97,7 @@ class RMSNorm(nn.Module):
         
         nn.init.trunc_normal_(self.weights)
 
-    def forward(self, x:Float[Tensor, "... d_model"])-> torch.Tensor:
+    def forward(self, x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
         # prevent overflow when applying square to input convert input to float 32
         in_dtype = x.dtype 
         x_fp32 =x.to(torch.float32)

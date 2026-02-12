@@ -342,9 +342,16 @@ if __name__== "__main__":
 """
 ========================== Training with AdamW resource accounting =============================
 float 32 with every tensor 
-a)
+a) d_ff = 4 * d_model
 We need to store the parameters 
-Memory usage = 
+Memory usage = batch_size * (num_layers(4 * d_model * d_model + 12 * d_model**2) + d_model * vocab_size)
+
+Transformer Block: 
+    - RMSNorm : weight (d_model) + output() + 1 parameter eps 
+    - attention per block: 4 * d_model * d_model 
+        activation : 4bytes/elements
+    - FFN per block: d_model * d_ff + d_model * d_ff + d_ff * d_model 
+- + (final layer) d_model * vocab_size
 
 """
 
