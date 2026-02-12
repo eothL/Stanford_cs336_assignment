@@ -340,6 +340,15 @@ if __name__== "__main__":
 
 
 """
+========================== Training with AdamW resource accounting =============================
+float 32 with every tensor 
+a)
+We need to store the parameters 
+Memory usage = 
+
+"""
+
+"""
 learning rate
 start learning rate tuning
 lr 10.0 test
@@ -421,12 +430,102 @@ it will require more than 8GB of memory in FP32
 in FP8, we could go down to 2GB of memory.                                                            
 
 
-b)
-the matrix input is size : (context_len * vocab_size)
-token embedding : 
+b) sequence has context_length tokens : d = context_length
+a matrix multiplication of (m,n)*(n,p) requires 2mnp FLOPs
+a matrix scalar multiplication of (m,n) require mn FLOPs
 
+FLOPs only for matrix multiplication
+For one transformer block:
+    Causal MHA self attention
+        Q : input: (context_length, d_model) * Wq (d_model, d_model)
+            2*context_length * d_model**2                                           = 2 * d * 1600**2
+        K:  2*context_length * d_model**2                                           = 2 * d * 1600**2
+        V:  2*context_length * d_model**2                                           = 2 * d * 1600**2
+        O:  2*context_length * d_model**2                                           = 2 * d * 1600**2
+        ---------------------------------------------------------------------------------------------
+                                                                                    = 8d * 1600**2
+        for each head : 25
+            sdpa: Q@K = (context_length, d_model//num_heads) * (context_length, d_model//num_heads).T
+                Q@K compute = 2 * context_length**2 * (d_model//num_heads)          = 2 * d**2 * (1600/25)
+                score@V compute = 2 * context_length**2 * (d_model//num_heads)      = 2 * d**2 * (1600/25)
+            -------------------------------------------------------------------------------------------------
+                                                                                    = 4 * d**2 * (1600/25) * 25
+    --------------------------------------------------------------------------------------------------------
+                                                                                    = 4 * 2 * d * 1600**2 + 100 * d**2 * (1600/25)
+                                                                                    = 8d * 1600**2 + 6400*d**2
+                                                                                    = 27 682 406 400 FLOPs  with d = 1024
+                                                                                    = 27 B FLOPs
+    FFN:
+        W1_proj: (context_length, d_model) * (d_ff d_model)                         = 2 * d * 1600 * 6400
+        W3_proj: (context_length, d_model) * (d_ff d_model)                         = 2 * d * 1600 * 6400
+        W2_proj: (context_length, d_model) * (d_model d_ff)                         = 2 * d * 1600 * 6400
+    --------------------------------------------------------------------------------------------------------
+                                                                                    = 6d * 1600 * 6400
+                                                                                    = 62 914 560 000 with d = 1024
+                                                                                    = 62,91 BFLOPs
+--------------------------------------------------------------------------------------------------------------------------------------
+                                                                                    = 48 * (6d * 1600 * 6400 + 8d * 1600**2 + 100d**2*(1600/25))
+Final Linear layer:
+    w_proj:  (vocab_size, d_model) * (context_length, d_model).T                    = 2 * 50257 * d * 1600
+--------------------------------------------------------------------------------------------------------------------------------------
+                                                                                    = 48 * (6d * 1600 * 6400 + 8d * 1600**2 + 100d**2*(1600/25)) + 2 * 50257 * d * 1600                                 
+                                                                                    = 48 * (27B + 63B) + 164 GB
+                                                                                    = 4 320 G + 164 B
+                                                                                    = 4,5 TFLOPs
+FLOPs for the rest
+    mean sqaure operation = mn (multiplication pow(2)) + m*(n-1) summing each row + m (divide each row sum by n)
+    Norm1 : input = (context_length d_model)
+        one matrix multiplication : 4 * context_length * d_model
 
+for a sequence of 1024 tokens, we need 4,5TFLOPs for the matrix multiplication with FFN representing a major part of the calculation
+with 2B parameters 
+- attention per block: 4 * d_model *d_model = 10,2M
+- FFN per block: d_model * d_ff + d_model * d_ff + d_ff * d_model = 30,7M
+- 2 B in total for transformer block
+- + (final layer) d_model * vocab_size = 80M  
+
+c) 
+FFN represent for more than 67%  of the total required FLOPs(3024/4500)
+Attention layer represents for more than 28,8% of the total required FLOPs(48*27/4500)
+last linear layer represent 3,6% of required FLOPs (164/4500)
+    
+FFN represent most of the computation
+
+d)
+for GPT-2 small (12 layers, 768 d_model and 12 heads) -> d_ff = 4*d_model = 3072
+    num_layer * (FFN + ATTn) + Final Layer
+        = num_layer * ((3 * 2 * d * d_model * d_ff) + (8 * d * d_model**2 + 4 * d**2 * d_model)) + 2 * vocab_size * d * d_model
+        = 12 * ((3*2*1024*768*3072) + (8*1024*768**2 + 4*1024**2*768)) + 2 * 50257 * 1024 * 768
+        = 12 * ((14,49B +  8B)) + 79B
+        = 49,8% + 27,5% + 22,6%
+        = 269,9 B + 79B
+        = 348,9 BFLOPs
+for GPT-2 medium (24 layers, 1024 d_model and 16 heads) -> d_ff = 4096
+    num_heads * (FFN + ATTn) + Final Layer
+        = num_heads * ((3 * 2 * d * d_model * d_ff) + (8 * d * d_model**2 + 4 * d**2 * d_model)) + 2 * vocab_size * d * d_model
+        = 24 * ((3*2*1024*1024*4096) + (8*1024*1024**2 + 4*1024**2*1024)) + 2 * 50257 * 1024 * 1024
+        = 59,9% + 29,9% + 10,2%
+        = 618,5B + 309,2B + 105,4 B
+        = 1 TFLOPs
+for GPT-2 large (36 layers, 1280 d_model and 20 heads) -> d_ff = 5120
+    num_heads * (FFN + ATTn) + Final Layer
+        = num_heads * ((3 * 2 * d * d_model * d_ff) + (8 * d * d_model**2 + 4 * d**2 * d_model)) + 2 * vocab_size * d * d_model
+        = 36 * ((3*2*1024*1280*5120) + (8*1024*1280**2 + 4*1024**2*1280)) + 2 * 50257 * 1024 * 1280
+        = 64,2% + 30,0%+5,8%
+        = 1 449B + 676,45B + 131B
+        = 2.25 TFLOPs
+as the model size increase the FFN part is taking more and more pourcentage 
+
+e) d = 16384
+if we multiply by 16 the context_length, 
+F(16384)=149 522 795 724 800 = 149.52 TFlops
+we will add 145 TFLOPs which represent an increase of 3213% or multiplication by 33 times 
+
+At d=1024: FFN 67%, Attention 29%, Final head 4%
+At d=16384: FFN 32.3%, Attention 65.9%, Final head 1.8%
+        
 """
+
 
 """
 ============================== Experiments on tokenizer ==============================
