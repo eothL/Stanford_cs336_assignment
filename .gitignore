@@ -14,4 +14,4 @@ uv.lock
 *.egg-info/
 
 .bin
-.log
+*.log
