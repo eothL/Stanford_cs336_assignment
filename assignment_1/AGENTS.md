@@ -15,13 +15,15 @@ This assignment provides hands-on experience with the fundamental building block
 
 ### Key code:
 - `basic/model.py`: core NN/transformer implementations (Linear, Embedding, RMSNorm, RoPE, SDPA, MHA, transformer block/LM, loss, optimizer pieces).
+- `basic/train.py`: training-loop support utilities (`data_loading`/`run_get_batch` path, checkpoint save/load helpers, and training-script wiring surface).
 - `tests/adapters.py`: required adapter entry points for the assignment tests (main implementation targets).
 - `basic/Tokenizer.py`: BPE tokenizer class (`encode`/`decode`, merge application, special token handling).
 - `basic/train_bpe.py`: main BPE training pipeline (heap-based merge selection and vocab/merge construction).
 - `basic/pretokenization.py`: corpus chunking + multiprocessing pretokenization/counting.
 - `basic/bytes_utils.py`: byte-level helper utilities used in tokenizer/BPE workflow.
 - `basic/assignment_question.py`: assignment-specific analysis/answers and related experiments.
-- `tests/test_model.py`, `tests/test_nn_utils.py`, `tests/test_optimizer.py`, `tests/test_serialization.py`, `tests/test_tokenizer.py`, `tests/test_train_bpe.py`, `tests/test_data.py`: primary test suites.
+- `tests/test_data.py` and `tests/test_serialization.py`: data-loading and checkpointing validation.
+- `tests/test_model.py`, `tests/test_nn_utils.py`, `tests/test_optimizer.py`, `tests/test_tokenizer.py`, `tests/test_train_bpe.py`: primary architecture/optimizer/tokenizer test suites.
 - `tests/fixtures/` and `tests/_snapshots/`: reference assets and expected outputs for tests.
 - `local/`: scratch space for experiments and debugging scripts.
 
