@@ -471,3 +471,19 @@ def learning_rate_schedule(t: int, lr_min: int, lr_max: int, Tw: int, Tc: int):
         return lr_min
     else:
         return lr_min+ (1/2) * (1 + math.cos((t-Tw) * math.pi/(Tc-Tw))) * (lr_max - lr_min)
+    
+
+def gradient_clipping(params: Iterable[torch.nn.Parameter], M: float, eps: float = 1e-6,):
+    # l2_norm = torch.norm(params)
+    grads = [p.grad for p in params if p.grad is not None]
+    if not grads:
+        return None
+    total_sq = sum(torch.sum(g*g) for g in grads)
+    total_norm = torch.sqrt(total_sq)
+    clip_coef = M/(total_norm + eps)
+    
+    if clip_coef < 1:
+        for g in grads:
+            g.mul_(clip_coef)
+
+    return None
