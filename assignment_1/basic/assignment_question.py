@@ -341,18 +341,109 @@ if __name__== "__main__":
 
 """
 ========================== Training with AdamW resource accounting =============================
-float 32 with every tensor 
-a) d_ff = 4 * d_model
-We need to store the parameters 
-Memory usage = batch_size * (num_layers(4 * d_model * d_model + 12 * d_model**2) + d_model * vocab_size)
+Assumption: 
+- B=batch_size,
+- T=context_length 
+- L=num_layers
+- D=d_model
+- H=num_heads 
+- V=vocab_size
+- d_ff = 4 * D
+- no biases, no checkpoint, AdamW stores (m,v) per parameter
+- untied output embedding
+- float 32 with every tensor
+- for FP32, s = 4 bytes/element
+- position wise FF : only W1, SiLU and W2
+a)
 
-Transformer Block: 
-    - RMSNorm : weight (d_model) + output() + 1 parameter eps 
-    - attention per block: 4 * d_model * d_model 
-        activation : 4bytes/elements
-    - FFN per block: d_model * d_ff + d_model * d_ff + d_ff * d_model 
-- + (final layer) d_model * vocab_size
+we count the number of element in the model before multiplying by the bytes/elements
+Parameters
+    Embedding layer (vocab_size * d_model)                                  = V * D
+    Transformer Block: 
+        - RMSNorm (2) : weight (d_model)                                    = 2 d_model
+        - attention per block: 4 * d_model * d_model                        = 4 * d_model**2
+        - FFN per block: d_model * d_ff + d_ff * d_model                    = 8 d_model**2
+        ------------------------------------------------------------------------------------
+                                                                            = L * (12 D**2 + 2D)
 
+    Final RSMNorm                                                           = D
+    Final layer d_model * vocab_size                                        = V* D
+    --------------------------------------------------------------------------------------------
+                                                                        P   = 2VD + D + L(12 D**2 + 2D) 
+
+Gradient we store as much gradient as parameters                          G = P(paramaters)
+
+AdamWoptimizer state (first and second moments)                           O = 2P
+
+Memory accounting (activations) uses output tensor shape
+Activation
+    Per Block:
+        - RMSNorm : 2 (batch_size context_length d_model)                   = 2 BTD
+        - MHA :
+            Q, K, V projection : 3 batch context_length d_model             = 3 BTD 
+            QK.T : Batch num_heads context length square                    = B*H*T**2
+            softmax :                                                       = B H T**2
+            weighted sum of values                                          = BTD
+            output projection                                               = BTD
+            ---------------------------------------------------------------------------
+                                                                            = 7 BTD + 2 BHT**2
+        - FFN :
+            W1 proj :      2 * B * T * d_ff                                 = 4 BTD
+            SiLU                                                            = 4 BTD
+            W2 proj :                                                       = BTD 
+            ---------------------------------------------------------------------------
+                                                                            = 9 BTD 
+        -------------------------------------------------------------------------------
+                                                                        A   = L * (16 BTD + 2 BHT**2)
+    
+    Final Norm                                                              = BTD
+    Output embedding                                                        = BTV
+    cross entropy on logits                                                 = BTV
+        -----------------------------------------------------------------------------------
+                                                                            = 2 BTV + BTD
+    ---------------------------------------------------------------------------------------
+                                                                            = 2 BTV + BTD + L * (16 BTD + 2 BHT**2)
+-------------------------------------------------------------------------------------------
+                                                                            = 4 P + A + 2 BTV + BTD
+                                                                            = 4 P + 2 BTV + BTD + L * (16 BTD + 2 BHT**2)
+                                                                            = 4 * (4 P + 2 BTV + BTD + L * (16 BTD + 2 BHT**2))
+s : 4bytes/elements
+
+b) 
+= 4 * (4 P + 2 BTV + BTD + L * (16 BTD + 2 BHT**2))
+= 16 P + 4 * (2TV + TD + L( 16TD + 2HT**2)) * B
+(80 - 16 P)/ (2TV + TD + L(16TD + 2HT**2)) = B
+B = (80-16)/15 = 3 for a GPU with 80 of memory
+
+with FP32 training with AdamW, we need memory for:
+- Parameters : P * 4 bytes
+- Gradients : P * 4 bytes
+- Adam states (m,v): 2 P * 4 bytes
+the model state subtotal is 16P which is already 32GB 
+Adding activation and logits, which scale with batch_size and context_length, we approach 80 GB
+we need 80 GB for training + optimizer + activation
+
+c)
+We need to compute one forward + backward + AdamW update:
+and we can assume that backward is two time the compute of forward
+    - AdamW update : = 13 FLOPs / per parameter
+        m = 3 FLOPs
+        v = 4 FLOPs
+        p *=  1 FLOPs
+        p += 5 FLOPs 
+without counting W3 in FFN:
+forward flops = B ( L (24TD**2 + 4DT**2) + 2TDV)
+        
+F = 3 (forward flops) + 13 * P wuith P = 1 635 537 600
+F = 10 520 110 694 000 * B + 13 * 1 635 537 600
+F = 10 520B * 3 + 13 * 1,64 B
+F = 31,6 TFLOPs for one step of AdamW with 3 as batch_size
+
+d) A100 = 19,5 TFLOPs for FP32
+at 50% MFU, (b = billion here)
+time = 400K * (10520b * 1024 + 13*1,64b)/ (19 500b/2)
+time = 5 115 days
+time = 14 years
 """
 
 """
@@ -479,11 +570,15 @@ Final Linear layer:
                                                                                     = 48 * (27B + 63B) + 164 GB
                                                                                     = 4 320 G + 164 B
                                                                                     = 4,5 TFLOPs
-FLOPs for the rest
-    mean sqaure operation = mn (multiplication pow(2)) + m*(n-1) summing each row + m (divide each row sum by n)
-    Norm1 : input = (context_length d_model)
-        one matrix multiplication : 4 * context_length * d_model
 
+formula : Forward FLOPs = B * (L (32 * T * D**2 + 4 * D * T**2) + 2TDV)
+(B=) batch size
+(T=) context length 
+(L=) num layers
+(D=) d_model
+(V=) vocab size
+(d_{ff}=4D)                                                                           
+                                                                                    
 for a sequence of 1024 tokens, we need 4,5TFLOPs for the matrix multiplication with FFN representing a major part of the calculation
 with 2B parameters 
 - attention per block: 4 * d_model *d_model = 10,2M
