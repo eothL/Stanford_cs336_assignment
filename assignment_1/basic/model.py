@@ -30,8 +30,7 @@ class Linear(nn.Module):
         if dtype is not None:
             self.factory_kwargs["dtype"] = dtype
         
-        self.in_features = in_features
-        self.out_features = out_features
+        # (out_features, in_features)
         self.weight = nn.Parameter(torch.empty((out_features,in_features), **self.factory_kwargs)) 
         self.bias = nn.Parameter(torch.empty((out_features,), **self.factory_kwargs)) if bias is True else None
 
@@ -65,9 +64,10 @@ class Embedding(nn.Module):
             self.factory_kwargs["device"] = device
         if dtype is not None:
             self.factory_kwargs["dtype"] = dtype
+
         self.num_embeddings =num_embeddings
         self.embedding_dim = embedding_dim
-        self.weight = nn.Parameter(torch.empty((self.num_embeddings, self.embedding_dim), **self.factory_kwargs))
+        self.weight = nn.Parameter(torch.empty((num_embeddings, embedding_dim), **self.factory_kwargs))
         
         nn.init.trunc_normal_(self.weight) # fill the matrix from truncated normal distribution between -3 sigma and 3 sigma
     
@@ -193,9 +193,6 @@ class RoPE(nn.Module):
     def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
         super().__init__()
         assert d_k% 2 ==0 
-        self.theta = theta
-        self.d_k = d_k
-        self.max_seq_len = max_seq_len
 
         k:Float[Tensor, "d_k_half"] = torch.arange(d_k // 2, device=device, dtype=torch.float32)  
         inv_freq:Float[Tensor, "d_k_half"]= theta ** (-2.0 * k / d_k)                                     
