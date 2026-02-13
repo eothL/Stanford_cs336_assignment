@@ -25,13 +25,14 @@ This assignment provides hands-on experience with the fundamental building block
 - `tests/fixtures/` and `tests/_snapshots/`: reference assets and expected outputs for tests.
 - `local/`: scratch space for experiments and debugging scripts.
 
-### Progress so far (Theo + prior agents, from `State/.ai/logs/diary.md` in the last 7 days: 2026-02-09 to 2026-02-12):
+### Progress so far (Theo + prior agents, from `State/.ai/logs/diary.md` in the last 7 days: 2026-02-09 to 2026-02-13):
+- 2026-02-13: completed cosine learning-rate scheduling and gradient clipping work; reinforced optimization intuition (norms, normalization, clipping behavior) and compared schedule shapes with multiple configurations.
 - 2026-02-12: focused on transformer-core completion (RoPE, SDPA, MHA, transformer block, LM wiring, and cross-entropy reasoning); resolved several adapter/model weight-loading and boundary-contract issues.
 - 2026-02-11: deep debugging pass on RoPE + MHA + TransformerBlock; fixed conceptual and implementation issues around Q/K handling, causal masking, and module-vs-parameter `copy_` usage.
 - 2026-02-10: clarified causal self-attention pipeline correctness (`Q/K/V`, `W_O`, and lower-triangular masking semantics), with emphasis on shape contracts for vectorized implementation.
 - 2026-02-09: cleaned and clarified AGENTS-level instruction precedence and workflow behavior.
 - Current risk captured in logs: integration drift from inconsistent naming/key mapping across adapters and model modules.
-- Remaining open adapter tasks (confirmed by current `NotImplementedError` stubs): `run_get_batch`, `run_gradient_clipping`, `run_get_lr_cosine_schedule`, `run_save_checkpoint`, `run_load_checkpoint`.
+- Remaining open adapter tasks (confirmed by current `NotImplementedError` stubs): `run_get_batch`, `run_save_checkpoint`, `run_load_checkpoint`.
 
 ## Core Tasks
 ✅: done / 🟡: currently doing / ⬜: not started
@@ -151,7 +152,7 @@ This assignment provides hands-on experience with the fundamental building block
 #### Loss Functions
 - **Softmax** (`run_softmax`) ✅: Implement softmax with numerical stability
 - **Cross-Entropy** (`run_cross_entropy`) ✅: Compute cross-entropy loss
-- **Gradient Clipping** (`run_gradient_clipping`) ⬜: Clip gradients by L2 norm
+- **Gradient Clipping** (`run_gradient_clipping`) ✅: Clip gradients by L2 norm
 
 ### 6. **Optimization** 🟡
 
@@ -163,7 +164,7 @@ This assignment provides hands-on experience with the fundamental building block
   - Bias correction
 - **Goal**: Provide efficient optimization for transformer training
 
-#### Learning Rate Scheduling (`run_get_lr_cosine_schedule`) ⬜
+#### Learning Rate Scheduling (`run_get_lr_cosine_schedule`) ✅
 - **Task**: Implement cosine learning rate schedule with warmup
 - **Parameters**:
   - `max_learning_rate`: Peak learning rate
