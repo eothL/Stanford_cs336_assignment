@@ -255,11 +255,12 @@ class scaled_dot_product_attention(nn.Module):
     
 
 class multihead_self_attention(nn.Module):
-    def __init__(self, d_model: int,  num_heads, bias = False, device: torch.device | None = None ):
+    def __init__(self, d_model: int,  num_heads, bias = False, device: torch.device | None = None):
         super().__init__()
         self.d_model   = d_model
         self.num_heads = num_heads
         self.d_k = self.d_v= d_model // num_heads
+        self.device = device
         self.q_proj = Linear(d_model, d_model, bias=bias,device=device)
         self.k_proj = Linear(d_model, d_model, bias=bias, device=device)
         self.v_proj = Linear(d_model, d_model, bias=bias, device=device)
@@ -268,7 +269,7 @@ class multihead_self_attention(nn.Module):
     def forward(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
         mask = torch.tril(torch.ones((seq_len,seq_len), dtype=torch.bool, device = x.device))
-        sdpa = scaled_dot_product_attention(mask)
+        sdpa = scaled_dot_product_attention(mask, device=self.device)
 
         # d_k = d_model//num_heads        
         Q:Float[Tensor, "... seq_len d_model"] = self.q_proj(x)
@@ -352,15 +353,29 @@ class transformer_block(nn.Module):
                 max_seq_len: int | None = None,
                 bias = False,
                 device : torch.device | None = None,
+                remove_rope : bool = False,
+                remove_rmsnorm : bool = False,
+                use_post_norm : bool = False,
                 ):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_ff = d_ff 
         self.device = device
-        self.rope = RoPE(theta,d_model//num_heads, max_seq_len, device= device) if theta is not None and max_seq_len is not None else None
-        self.rmsnorm1 = RMSNorm(d_model, device= device)
-        self.rmsnorm2 = RMSNorm(d_model, device= device)
+        self.use_post_norm = use_post_norm
+        
+        if remove_rope is False:
+            self.rope = RoPE(theta,d_model//num_heads, max_seq_len, device= device) if theta is not None and max_seq_len is not None else None
+        else: 
+            self.rope = None
+
+        if remove_rmsnorm is False or self.use_post_norm is True:
+            self.rmsnorm1 = RMSNorm(d_model, device= device)
+            self.rmsnorm2 = RMSNorm(d_model, device= device)
+        else:
+            self.rmsnorm1 = None
+            self.rmsnorm2 = None
+        
         self.MHA_layer = multihead_self_attention(d_model, num_heads, bias= bias, device= device)
         self.FFN = positionwise_feedforward(d_model=d_model,d_ff=d_ff, bias =bias, device= device)
 
@@ -369,12 +384,24 @@ class transformer_block(nn.Module):
         if token_positions is None:
             seq_len = x.shape[-2]
             token_positions = torch.arange(seq_len, device=x.device, dtype=torch.long)
-        x_norm = self.rmsnorm1(x)
-        MHA_attn = self.MHA_layer(x_norm, token_positions=token_positions, rope=self.rope)
-        h = x + MHA_attn
-        h_norm = self.rmsnorm2(h)
 
-        return  self.FFN(h_norm) + h
+        if self.rmsnorm1 is not None and self.use_post_norm is False:
+            x_norm = self.rmsnorm1(x)
+        else:
+            x_norm = x  
+        MHA_attn = self.MHA_layer(x_norm, token_positions=token_positions, rope=self.rope)
+        
+        if self.use_post_norm is False:
+            h = x + MHA_attn
+        else:
+            h = self.rmsnorm1(x + MHA_attn)
+
+        if self.rmsnorm2 is not None and self.use_post_norm is False:
+            h_norm = self.rmsnorm2(h)
+        else :
+            h_norm = h
+
+        return  self.FFN(h_norm) + h if self.use_post_norm is False else self.rmsnorm2(self.FFN(h_norm) + h)
 
 
 def cross_entropy(predicted_logits: Float[Tensor, "batch_size vocab_size"], targets: Int[Tensor, "batch_size"]) -> Float[Tensor, ""]:
