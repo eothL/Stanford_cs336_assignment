@@ -213,6 +213,7 @@ def auto_run_name(args):
           "wd": args.weight_decay,
           "beta1": args.betas[0],
           "beta2": args.betas[1],
+          "dataset": args.train_dataset
       }
     slug = (
         f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}"
@@ -235,9 +236,14 @@ def train():
     cosine_cycle = args.cosine_cycle_iters
 
     context_length = args.context_length
+    if args.train_dataset == "openwebtext_train.uint16.bin":
+        dataset_name = "owt"
+    else:
+        dataset_name = "ts"
+
     if not args.run_name:
         args.run_name = auto_run_name(args)
-    run_name = args.run_name
+    run_name = "_".join([args.run_name, dataset_name]) 
     run_number = args.run_number
 
     # file 
