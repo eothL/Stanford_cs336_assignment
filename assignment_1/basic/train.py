@@ -329,7 +329,7 @@ def train():
             }
         )
 
-        if val_loss < best_val:
+        if val_loss < best_val and best_val < 6.0:
             best_val = val_loss
             result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
             save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
