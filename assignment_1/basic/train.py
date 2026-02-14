@@ -9,10 +9,16 @@ import numpy as np
 import argparse
 import wandb
 import time
-from .Tokenizer import Tokenizer
+from functools import partial
 from . import model 
 
+def load_tokens(path, use_memmap:bool):
+    if use_memmap:
+        return np.memmap(path, dtype=np.uint16, mode="r")
+    return np.fromfile(path, dtype=np.uint16)
+
 def data_loading(x: Int[npt.NDArray, "..."], batch_size: int, context_length: int, device: str = "cpu") -> tuple[Int[Tensor, "batch_size seq_len"], Int[Tensor, "batch_size seq_len"]]:
+    """load fully dataset to train it"""
     x_t = torch.as_tensor(x, dtype = torch.long, device=device)
 
     starts = torch.randint(0, len(x_t)- context_length, (batch_size,), device= device) # tensor of size batch with value between 0 and len(x) - context_length
@@ -23,6 +29,14 @@ def data_loading(x: Int[npt.NDArray, "..."], batch_size: int, context_length: in
         
     return (x_t[idx], x_t[idx+1]) # (x_batch, y_batch)
 
+def get_batch(tokens, batch_size, context_length, device):
+    max_start = len(tokens) - context_length - 1
+    starts = np.random.randint(0, max_start, size=batch_size)
+    
+    x = np.stack([tokens[s:s+context_length] for s in starts]).astype(np.int64)
+    y = np.stack([tokens[s+1:s+1+context_length] for s in starts]).astype(np.int64)
+    # convert to torch tensor 
+    return torch.from_numpy(x).to(device),torch.from_numpy(y).to(device)
 
 def save_checkpoint(model: torch.nn.Module, optimizer : torch.optim.Optimizer, iteration: int, out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]):
     checkpoint = { 
@@ -39,81 +53,6 @@ def load_checkpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
     return ckpt["iteration"]
 
 
-def run_epoch(
-        LM: torch.nn.Module, 
-        loader,
-        loss_fcn,
-        optimizer: torch.optim.Optimizer,
-        device: torch.device | None = None,
-        training = True,
-):
-    if training :
-        LM.train()
-        context = torch.enable_grad()
-    else:
-        LM.eval()
-        context = torch.no_grad()
-    
-    total_loss = 0
-    total_sample = 0
-    with context:
-        x, y = loader()
-        logits: Float[Tensor, "batch_size seq_len vocab_size"] = LM(x)
-        # flatten matrices with view(-1) and reshape into vocab_size for x
-        loss = model.cross_entropy(predicted_logits= logits.view(-1, logits.size(-1)), targets= y.view(-1))
-
-        if training:
-            optimizer.zero_grad(set_to_none=True) # cleaning grads from previous step
-            loss.backward()
-            model.gradient_clipping(LM.parameters(), M = 1e-2)
-            optimizer.step()
-
-        batch_size = logits.size(0)
-        total_loss += loss * batch_size
-        total_sample += batch_size
-    avg_loss = total_loss/total_sample
-    return avg_loss
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description= "Train Transformer Language Model"
-    )
-    parser.add_argument("--vocab-file", default="vocab_10k.json")
-    parser.add_argument("--merge-file", default="merges_10k.txt")
-    parser.add_argument("--base-pattern", default=r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
-    parser.add_argument("--special-tokens", default=["<|endoftext|>"])
-    parser.add_argument("--dataset", default="tinystories_val.uint16.bin")
-    parser.add_argument("--device", default=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-    parser.add_argument("--seed", type = int, default = 93)
-    parser.add_argument("--run-name", default = "Transformer_LM_from_scratch" )
-    parser.add_argument("--run-number",type = int, default = 1)
-    parser.add_argument("--save-every", type = int, default = 10)
-
-    # hyperparameter
-    parser.add_argument("--epochs", type= int, default = 100)
-    parser.add_argument("--batch-size", default = 3)
-    parser.add_argument("--context-length", default = 16)
-    parser.add_argument("--vocab-size", default= 10000)
-    parser.add_argument("--hidden-dimension", default= 64)
-    parser.add_argument("--lr", default= 1e-5)
-    parser.add_argument("--num-layers", default= 3)
-    parser.add_argument("--num-heads", type= int, default= 4)
-    parser.add_argument("--rope-theta", type= float, default= 10000.0)
-    parser.add_argument("--lr-max", type= float, default=1)
-    parser.add_argument("--lr-min", type= float, default=0.01)
-    parser.add_argument("--warmup-iters", type= int, default=7)
-    parser.add_argument("--cosine-cycle-iters", type= int, default=21)
-
-    # Architecture
-    parser.add_argument("--use-post-norm", type= bool, default=False)
-    parser.add_argument("--remove-rope", type= bool, default=False)
-    parser.add_argument("--remove-rmsnorm", type= bool, default=False)
-    parser.add_argument("--use-bias", type = bool, default= False)
-
-    return parser.parse_args()
-
-        
 class TransformerLM(nn.Module):
     def __init__(self, 
                 vocab_size,
@@ -161,11 +100,104 @@ class TransformerLM(nn.Module):
         return logits
 
 
+def run_epoch(
+        LM: torch.nn.Module, 
+        loader,
+        loss_fcn,
+        optimizer: torch.optim.Optimizer,
+        lr: float | None = None ,
+        device: torch.device | None = None,
+        training = True,
+):
+    if training :
+        LM.train()
+        context = torch.enable_grad()
+    else:
+        LM.eval()
+        context = torch.no_grad()
+    
+    total_loss = 0
+    total_sample = 0
+    with context:
+        x, y = loader()
+        logits: Float[Tensor, "batch_size seq_len vocab_size"] = LM(x)
+        # flatten matrices with view(-1) and reshape into vocab_size for x
+        loss = loss_fcn(predicted_logits= logits.view(-1, logits.size(-1)), targets= y.view(-1))
+
+        if training:
+            optimizer.zero_grad(set_to_none=True) # cleaning grads from previous step
+            # updating learning rate 
+            for g in optimizer.param_groups:
+                g["lr"] = lr
+
+            loss.backward()
+            model.gradient_clipping(LM.parameters(), M = 1e-2)
+            optimizer.step()
+
+        batch_size = logits.size(0)
+        total_loss += loss * batch_size
+        total_sample += batch_size
+
+    avg_loss = total_loss/total_sample
+    return avg_loss
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description= "Train Transformer Language Model"
+    )
+    # tokenizer
+    parser.add_argument("--vocab-file", default="vocab_10k.json")
+    parser.add_argument("--merge-file", default="merges_10k.txt")
+    parser.add_argument("--base-pattern", default=r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+    parser.add_argument("--special-tokens", default=["<|endoftext|>"])
+
+    parser.add_argument("--train-dataset", default="tinystories_train.uint16.bin")
+    parser.add_argument("--val-dataset", default="tinystories_val.uint16.bin")
+    parser.add_argument("--out-dir", default=None)
+    # default False, becomes True if present
+    parser.add_argument("--use-memmap", action= "store_true")
+    parser.add_argument("--device", default=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    parser.add_argument("--seed", type = int, default = 93)
+    parser.add_argument("--run-name", default = "Transformer_LM_from_scratch" )
+    parser.add_argument("--run-number",type = int, default = 1)
+    parser.add_argument("--save-every", type = int, default = 10)
+
+    # hyperparameter
+    parser.add_argument("--epochs", type= int, default = 100)
+    parser.add_argument("--batch-size", type= int, default = 3)
+    parser.add_argument("--context-length",type= int, default = 16)
+    parser.add_argument("--vocab-size",type= int, default= 10000)
+    parser.add_argument("--hidden-dimension",type= int, default= 64)
+    parser.add_argument("--num-layers",type= int, default= 3)
+    parser.add_argument("--num-heads", type= int, default= 4)
+    parser.add_argument("--rope-theta", type= float, default= 10000.0)
+    
+    ## Optimizer
+    parser.add_argument("--betas", nargs= 2, type=float, default=(0.9,0.99))
+    parser.add_argument("--weight-decay", type = float, default=1e-2)
+
+    ## Learning rate scheduler 
+    parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
+    parser.add_argument("--lr-max", type= float, default=1)
+    parser.add_argument("--lr-min", type= float, default=0.01)
+    parser.add_argument("--warmup-iters", type= int, default=7)
+    parser.add_argument("--cosine-cycle-iters", type= int, default=21)
+    
+    ## Architecture
+    # if mentionned, it will be true and activated
+    parser.add_argument("--use-post-norm", action="store_true")
+    parser.add_argument("--remove-rope", action="store_true")
+    parser.add_argument("--remove-rmsnorm", action="store_true")
+    parser.add_argument("--use-bias", action="store_true")
+
+    return parser.parse_args()
+
+        
 def train():
     # argument
     args = parse_args()
-    base_pattern = args.base_pattern
-    special_tokens = args.special_tokens
+    args.betas = tuple(args.betas) # convert it as a tuple because args. will return a list
     device = args.device
     epochs = args.epochs
     batch_size = args.batch_size
@@ -183,13 +215,12 @@ def train():
     artifacts_path = os.path.join(HERE, artifacts_folder)
     os.makedirs(artifacts_path, exist_ok = True)
 
-    vocab_path = os.path.join(artifacts_path, args.vocab_file)
-    merge_path = os.path.join(artifacts_path, args.merge_file)
-    data_path = os.path.join(artifacts_path, args.dataset)
+    val_data_path = os.path.join(artifacts_path, args.val_dataset)
+    train_data_path = os.path.join(artifacts_path, args.train_dataset)
 
     ## experiment folder
     exp_folder_name = f"experiment_{run_name}"
-    exp_path = os.path.join(artifacts_path,exp_folder_name)
+    exp_path = os.path.join(artifacts_path,exp_folder_name) if args.out_dir is None else args.out_dir
     os.makedirs(exp_path, exist_ok= True)
 
     run = wandb.init(
@@ -211,6 +242,7 @@ def train():
         "num_layers" : args.num_layers,
         "num_heads" : args.num_heads,
         "rope_theta" : args.rope_theta,
+        "device": device,
         "bias" : args.use_bias,
         "remove_rope" : args.remove_rope,
         "remove_rmsnorm" : args.remove_rmsnorm,
@@ -223,28 +255,36 @@ def train():
 
     # model initializing
     LM = TransformerLM(**model_cfg).to(device)
+    optimizer = model.AdamW(LM.parameters(), lr = args.lr_max, betas= args.betas, weight_decay=args.weight_decay)
+    loss_fcn = model.cross_entropy()
 
-    total_params = sum(p.numel() for p in LM.parameters)
+    total_params = sum(p.numel() for p in LM.parameters())
     print(f"Model parameters: {total_params}")
     wandb.log({"model_params": total_params})
 
-    with open(data_path, "rb") as f:
-        data = f.read()
-        data_array = np.array(data)
+    # loading data
+    ## loading token from uint16.bin file
+    train_tokens = load_tokens(train_data_path, use_memmap=args.use_memmap)
+    val_tokens = load_tokens(val_data_path, use_memmap=args.use_memmap)
+    
+    if args.use_memmap :
+        train_loader = partial(get_batch, train_tokens, batch_size, context_length, device) 
+        val_loader = partial(get_batch, val_tokens, batch_size, context_length, device) 
+    else:
+        train_loader = partial(get_batch, train_tokens, batch_size, context_length, device)
+        val_loader = partial(get_batch, val_tokens, batch_size, context_length, device)
 
     # metrics
     history = []
     best_val = float("inf")
-
+    
     start = time.time()
     for epoch in range(epochs):
         epoch_start = time.time()
         # forward
-        x,y = data_loading(x=data_array, batch_size=batch_size, context_length=context_length, device= device)
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
-        optimizer = model.AdamW(LM.parameters(), lr = lr)
-        train_loss = run_epoch(LM=LM, loader=(x,y), loss_fcn=model.cross_entropy, optimizer=optimizer, device = device, training = True)
-        val_loss = run_epoch(LM=LM, loader=(x,y), loss_fcn=model.cross_entropy, optimizer=optimizer, device = device, training = False)
+        train_loss = run_epoch(LM=LM, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True)
+        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, optimizer=optimizer, device = device, training = False)
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
         
         epoch_time = time.time() - epoch_start
@@ -268,7 +308,7 @@ def train():
         if args.save_every and epoch % args.save_every == 0:
             result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
             checkpoint_path = result_path
-            save_checkpoint
+            save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
             print(f"checkpoint saved : { checkpoint_path}")
 
     total_minute = (time.time() - start) / 60.0
