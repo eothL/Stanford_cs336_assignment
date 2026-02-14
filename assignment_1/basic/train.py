@@ -327,7 +327,6 @@ def train():
         epoch_time = time.time() - epoch_start
         wandb.log(
             { 
-                "epoch": epoch,
                 "train_loss": train_loss,
                 "val_loss": val_loss,
                 "lr": lr,
@@ -340,7 +339,7 @@ def train():
             result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
             save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
             print(f" New best val {best_val: .4f}. Saved {result_path}")
-            wandb.log({ "best_val_loss": best_val, "best_epoch": epoch})
+            wandb.log({ "best_val_loss": best_val })
 
         if args.save_every and epoch % args.save_every == 0:
             result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
