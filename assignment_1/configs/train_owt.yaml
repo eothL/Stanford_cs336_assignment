@@ -4,7 +4,7 @@
   val_dataset: "openwebtext_val.uint16.bin"
   epochs: 10000
   batch_size: 3
-  context_length: 1024
+  context_length: 512 # context len use for the leaderboard
   lr_max: 0.001
   lr_min: 0.00001
   warmup_iters: 50
