@@ -4,6 +4,7 @@ from torch import Tensor
 import numpy.typing as npt
 import os 
 import yaml
+import json, hashlib
 from jaxtyping import Float, Int
 import typing
 import numpy as np
@@ -52,7 +53,6 @@ def load_checkpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
     model.load_state_dict(ckpt["model_state_dict"])
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
     return ckpt["iteration"]
-
 
 class TransformerLM(nn.Module):
     def __init__(self, 
@@ -162,7 +162,7 @@ def parse_args():
     parser.add_argument("--seed", type = int, default = 93)
     parser.add_argument("--run-name", default = "Transformer_LM_from_scratch" )
     parser.add_argument("--run-number",type = int, default = 1)
-    parser.add_argument("--save-every", type = int, default = 500)
+    parser.add_argument("--save-every", type = int, default = 1000)
 
     # hyperparameter
     parser.add_argument("--epochs", type= int, default = 100)
@@ -194,7 +194,7 @@ def parse_args():
 
     parser.add_argument("--config", type= str, default= None)
     # yaml config 
-    pre_args, remaining = parser.parse_known_args()
+    pre_args, _ = parser.parse_known_args()
     if pre_args.config:
         with open(pre_args.config, "r") as f:
             cfg = yaml.safe_load(f) or {}
@@ -202,7 +202,26 @@ def parse_args():
 
     return parser.parse_args()
 
-        
+def auto_run_name(args):
+    cfg = {
+          "L": args.num_layers,
+          "H": args.num_heads,
+          "D": args.hidden_dimension,
+          "ctx": args.context_length,
+          "bs": args.batch_size,
+          "lrmax": args.lr_max,
+          "wd": args.weight_decay,
+          "beta1": args.betas[0],
+          "beta2": args.betas[1],
+      }
+    slug = (
+        f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}"
+        f"-bs{cfg['bs']}-lr{cfg['lrmax']}-wd{cfg['wd']}"
+    )
+    h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
+    return f"{slug}-{h}"
+
+
 def train():
     # argument
     args = parse_args()
@@ -216,8 +235,11 @@ def train():
     cosine_cycle = args.cosine_cycle_iters
 
     context_length = args.context_length
+    if not args.run_name:
+        args.run_name = auto_run_name(args)
     run_name = args.run_name
     run_number = args.run_number
+
     # file 
     artifacts_folder = "artifacts"
     HERE = os.path.dirname(os.path.abspath(__file__))
