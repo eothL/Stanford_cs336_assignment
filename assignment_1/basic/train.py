@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch import Tensor
 import numpy.typing as npt
 import os 
+import yaml
 from jaxtyping import Float, Int
 import typing
 import numpy as np
@@ -161,7 +162,7 @@ def parse_args():
     parser.add_argument("--seed", type = int, default = 93)
     parser.add_argument("--run-name", default = "Transformer_LM_from_scratch" )
     parser.add_argument("--run-number",type = int, default = 1)
-    parser.add_argument("--save-every", type = int, default = 10)
+    parser.add_argument("--save-every", type = int, default = 500)
 
     # hyperparameter
     parser.add_argument("--epochs", type= int, default = 100)
@@ -190,6 +191,14 @@ def parse_args():
     parser.add_argument("--remove-rope", action="store_true")
     parser.add_argument("--remove-rmsnorm", action="store_true")
     parser.add_argument("--use-bias", action="store_true")
+
+    parser.add_argument("--config", type= str, default= None)
+    # yaml config 
+    pre_args, remaining = parser.parse_known_args()
+    if pre_args.config:
+        with open(pre_args.config, "r") as f:
+            cfg = yaml.safe_load(f) or {}
+            parser.set_defaults(**cfg)
 
     return parser.parse_args()
 
