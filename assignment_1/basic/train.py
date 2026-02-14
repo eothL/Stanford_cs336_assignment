@@ -158,7 +158,7 @@ def parse_args():
     parser.add_argument("--out-dir", default=None)
     # default False, becomes True if present
     parser.add_argument("--use-memmap", action= "store_true")
-    parser.add_argument("--device", default=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+    parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type = int, default = 93)
     parser.add_argument("--run-name", default = "Transformer_LM_from_scratch" )
     parser.add_argument("--run-number",type = int, default = 1)
@@ -193,7 +193,7 @@ def parse_args():
     parser.add_argument("--use-bias", action="store_true")
 
     parser.add_argument("--config", type= str, default= None)
-    # yaml config 
+    # read yaml config 
     pre_args, _ = parser.parse_known_args()
     if pre_args.config:
         with open(pre_args.config, "r") as f:
@@ -226,7 +226,7 @@ def train():
     # argument
     args = parse_args()
     args.betas = tuple(args.betas) # convert it as a tuple because args. will return a list
-    device = args.device
+    device = torch.device(args.device)
     epochs = args.epochs
     batch_size = args.batch_size
     lr_min = args.lr_min
