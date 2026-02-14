@@ -256,7 +256,7 @@ def train():
     # model initializing
     LM = TransformerLM(**model_cfg).to(device)
     optimizer = model.AdamW(LM.parameters(), lr = args.lr_max, betas= args.betas, weight_decay=args.weight_decay)
-    loss_fcn = model.cross_entropy()
+    loss_fcn = model.cross_entropy
 
     total_params = sum(p.numel() for p in LM.parameters())
     print(f"Model parameters: {total_params}")
