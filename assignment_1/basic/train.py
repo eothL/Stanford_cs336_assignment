@@ -8,6 +8,7 @@ import typing
 import numpy as np
 import argparse
 import wandb
+import time
 from .Tokenizer import Tokenizer
 from . import model 
 
@@ -84,8 +85,10 @@ def parse_args():
     parser.add_argument("--special-tokens", default=["<|endoftext|>"])
     parser.add_argument("--dataset", default="tinystories_val.uint16.bin")
     parser.add_argument("--device", default=torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-    parser.add_argument("--seed", type = int, default= 93)
-    parser.add_argument("--run-name")
+    parser.add_argument("--seed", type = int, default = 93)
+    parser.add_argument("--run-name", default = "Transformer_LM_from_scratch" )
+    parser.add_argument("--run-number",type = int, default = 1)
+    parser.add_argument("--save-every", type = int, default = 10)
 
     # hyperparameter
     parser.add_argument("--epochs", type= int, default = 100)
@@ -173,6 +176,7 @@ def train():
 
     context_length = args.context_length
     run_name = args.run_name
+    run_number = args.run_number
     # file 
     artifacts_folder = "artifacts"
     HERE = os.path.dirname(os.path.abspath(__file__))
@@ -188,14 +192,13 @@ def train():
     exp_path = os.path.join(artifacts_path,exp_folder_name)
     os.makedirs(exp_path, exist_ok= True)
 
-    result_path = os.path.join(exp_path, f"result_json_{run_name}")
-
     run = wandb.init(
         project = "Transformer_LM_training",
         name = run_name,
         config={
-
-        }
+            "optimizer": "AdamW",
+            **vars(args),
+        },
     )
     
     
@@ -232,7 +235,10 @@ def train():
     # metrics
     history = []
     best_val = float("inf")
+
+    start = time.time()
     for epoch in range(epochs):
+        epoch_start = time.time()
         # forward
         x,y = data_loading(x=data_array, batch_size=batch_size, context_length=context_length, device= device)
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
@@ -240,10 +246,39 @@ def train():
         train_loss = run_epoch(LM=LM, loader=(x,y), loss_fcn=model.cross_entropy, optimizer=optimizer, device = device, training = True)
         val_loss = run_epoch(LM=LM, loader=(x,y), loss_fcn=model.cross_entropy, optimizer=optimizer, device = device, training = False)
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
-        save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
         
+        epoch_time = time.time() - epoch_start
+        wandb.log(
+            { 
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "lr": lr,
+                "epoch_time": epoch_time
+            }
+        )
 
-        
+        if val_loss < best_val:
+            best_val = val_loss
+            result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
+            save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
+            print(f" New best val {best_val: .4f}. Saved {result_path}")
+            wandb.log({ "best_val_loss": best_val, "best_epoch": epoch})
+
+        if args.save_every and epoch % args.save_every == 0:
+            result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
+            checkpoint_path = result_path
+            save_checkpoint
+            print(f"checkpoint saved : { checkpoint_path}")
+
+    total_minute = (time.time() - start) / 60.0
+
+    print(f"Training complete in { total_minute: .2f} min with the best val loss = {best_val}")
+    wandb.log({"total_training_time": total_minute})
+    wandb.finish()
+
+if __name__=="__main__":
+    train()
 
 
     
