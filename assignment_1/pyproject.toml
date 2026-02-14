@@ -25,7 +25,7 @@ testpaths = ["test"]
 addopts = "-q"
 
 [tool.setuptools]
-packages = ["basic", "local"]
+packages = ["basic"]
 
 [build-system]
 requires = ["setuptools>=68"]
