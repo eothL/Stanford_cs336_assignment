@@ -6,15 +6,15 @@
   batch_size: 3
   context_length: 1024
   lr_max: 0.001
-  lr_min: 0.0001
+  lr_min: 0.00001
   warmup_iters: 50
-  cosine_cycle_iters: 500
+  cosine_cycle_iters: 5000
   out_dir: null
   device: "cuda"
   seed: 93
   run_number: 1
   save_every: 5000
-  vocab_size: 30000
+  vocab_size: 32000
   hidden_dimension: 1024
   num_layers: 24
   num_heads: 16
