@@ -92,7 +92,6 @@ class TransformerLM(nn.Module):
         )
     
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
-        assert x.shape[1] <= self.context_length
 
         h = self.embedding(x)
         for block in self.transformer_blocks:
