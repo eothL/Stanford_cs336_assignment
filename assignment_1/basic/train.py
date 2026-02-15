@@ -334,11 +334,12 @@ def train():
             }
         )
 
-        if val_loss < best_val and best_val < 6.0:
+        if val_loss < best_val:
             best_val = val_loss
-            result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
-            save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
-            print(f" New best val {best_val: .4f}. Saved {result_path}")
+            if best_val < 6.0:
+                result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
+                save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
+                print(f" New best val {best_val: .4f}. Saved {result_path}")
             wandb.log({ "best_val_loss": best_val })
 
         if args.save_every and epoch % args.save_every == 0:
