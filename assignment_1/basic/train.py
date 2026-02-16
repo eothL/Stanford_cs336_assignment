@@ -240,7 +240,7 @@ def train():
         limited_tokens = max_token_processed is not None  
     else:
         max_token_processed = None
-        limited_tokens = max_token_processed is None  
+        limited_tokens = max_token_processed is not None  
 
     if args.ff_dimension is None:
         args.ff_dimension = 4 * args.hidden_dimension
@@ -332,7 +332,7 @@ def train():
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
         train_loss = run_epoch(LM=LM, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True)
         val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, optimizer=optimizer, device = device, training = False)
-        total_token_processed = batch_size * epoch * context_length
+        total_token_processed += batch_size * context_length
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
         epoch_time = time.time() - epoch_start
@@ -359,7 +359,7 @@ def train():
             save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
             print(f"checkpoint saved : { checkpoint_path}")
 
-        if limited_tokens and total_token_processed > max_token_processed:
+        if limited_tokens and total_token_processed >= max_token_processed:
             break 
 
     total_minute = (time.time() - start) / 60.0
