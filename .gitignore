@@ -13,5 +13,6 @@ local/
 uv.lock
 *.egg-info/
 
+*.pth
 .bin
 *.log
