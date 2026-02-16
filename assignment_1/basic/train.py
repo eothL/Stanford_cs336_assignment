@@ -169,6 +169,7 @@ def parse_args():
     parser.add_argument("--context-length",type= int, default = 16)
     parser.add_argument("--vocab-size",type= int, default= 10000)
     parser.add_argument("--hidden-dimension",type= int, default= 64)
+    parser.add_argument("--ff-dimension", type= int, default = None )
     parser.add_argument("--num-layers",type= int, default= 3)
     parser.add_argument("--num-heads", type= int, default= 4)
     parser.add_argument("--rope-theta", type= float, default= 10000.0)
@@ -233,6 +234,8 @@ def train():
     lr_max = args.lr_max
     warmup = args.warmup_iters
     cosine_cycle = args.cosine_cycle_iters
+    if args.ff_dimension is None:
+        args.ff_dimension = 4 * args.hidden_dimension
 
     context_length = args.context_length
     if args.train_dataset == "openwebtext_train.uint16.bin":
@@ -274,7 +277,7 @@ def train():
         "vocab_size" : args.vocab_size,
         "context_length" : args.context_length,
         "d_model" : args.hidden_dimension,
-        "d_ff" : 4 * args.hidden_dimension,
+        "d_ff" : args.ff_dimension,
         "num_layers" : args.num_layers,
         "num_heads" : args.num_heads,
         "rope_theta" : args.rope_theta,
