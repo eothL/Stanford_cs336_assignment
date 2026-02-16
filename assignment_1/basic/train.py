@@ -162,6 +162,7 @@ def parse_args():
     parser.add_argument("--run-name", default = "Transformer_LM_from_scratch" )
     parser.add_argument("--run-number",type = int, default = 1)
     parser.add_argument("--save-every", type = int, default = 1000)
+    parser.add_argument("--max-token-processed", type= int, default= None)
 
     # hyperparameter
     parser.add_argument("--epochs", type= int, default = 100)
@@ -234,6 +235,13 @@ def train():
     lr_max = args.lr_max
     warmup = args.warmup_iters
     cosine_cycle = args.cosine_cycle_iters
+    if args.max_token_processed is not None:
+        max_token_processed = args.max_token_processed
+        limited_tokens = max_token_processed is not None  
+    else:
+        max_token_processed = None
+        limited_tokens = max_token_processed is None  
+
     if args.ff_dimension is None:
         args.ff_dimension = 4 * args.hidden_dimension
 
@@ -316,7 +324,7 @@ def train():
     # metrics
     history = []
     best_val = float("inf")
-    
+    total_token_processed = 0
     start = time.time()
     for epoch in range(epochs):
         epoch_start = time.time()
@@ -324,7 +332,8 @@ def train():
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
         train_loss = run_epoch(LM=LM, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True)
         val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, optimizer=optimizer, device = device, training = False)
-        history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
+        total_token_processed = batch_size * epoch * context_length
+        history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
         epoch_time = time.time() - epoch_start
         wandb.log(
@@ -349,6 +358,9 @@ def train():
             checkpoint_path = result_path
             save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
             print(f"checkpoint saved : { checkpoint_path}")
+
+        if limited_tokens and total_token_processed > max_token_processed:
+            break 
 
     total_minute = (time.time() - start) / 60.0
 
