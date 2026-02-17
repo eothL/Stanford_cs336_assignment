@@ -6,7 +6,6 @@ import yaml
 from .inference import generate_text, load_model
 
 
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate text with a trained TransformerLM.")
     parser.add_argument("--config", default=None, help="Path to model config (.yaml/.json).")
@@ -24,6 +23,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--seed", type=int, default=None)
 
+    # Overwrite config file 
+    parser.add_argument("--batch-size", type=int, default= None)
+    parser.add_argument("--vocab-size", type=int, default=None)
+    parser.add_argument("--context-length", type=int, default=None)
+    parser.add_argument("--d-model", type=int, default=None)
+    parser.add_argument("--hidden-dimension", type=int, default=None)
+    parser.add_argument("--d-ff", type=int, default=None)
+    parser.add_argument("--ff-dimension", type=int, default=None)
+    parser.add_argument("--num-layers", type=int, default=None)
+    parser.add_argument("--num-heads", type=int, default=None)
+    parser.add_argument("--rope-theta", type=float, default=None)
+
+    parser.add_argument("--remove-rope", action="store_true")
+    parser.set_defaults(remove_rope=None)
+    parser.add_argument("--remove-rmsnorm", action="store_true")
+    parser.set_defaults(remove_rmsnorm=None)
+    parser.add_argument("--use-post-norm", action="store_true")
+    parser.set_defaults(use_post_norm=None)
+
+    parser.add_argument("--use-bias", action="store_true")
+    parser.set_defaults(use_bias=None)
+
     # read yaml config 
     pre_args, _ = parser.parse_known_args()
     if pre_args.config:
@@ -31,6 +52,37 @@ def parse_args() -> argparse.Namespace:
             cfg = yaml.safe_load(f) or {}
             parser.set_defaults(**cfg)
     return parser.parse_args()
+
+
+def _collect_model_overrides(args: argparse.Namespace) -> dict[str]:
+    return {
+        "vocab_size": args.vocab_size,
+        "context_length": args.context_length,
+        "bacth_size": args.batch_size,
+        "d_model": args.hidden_dimension,
+        "d_ff": args.d_ff,
+        "num_layers": args.num_layers,
+        "num_heads": args.num_heads,
+        "rope_theta": args.rope_theta,
+        "remove_rope": args.remove_rope,
+        "remove_rmsnorm": args.remove_rmsnorm,
+        "use_post_norm": args.use_post_norm,
+        "use_bias": args.use_bias,
+    }
+
+def _build_generation_config(args: argparse.Namespace) -> dict[str]:
+    cfg: dict[str] = {}
+    if args.config is None:
+        return vars(args) #return a dict version 
+
+    with open(args.config, "r") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    # if any parameter vary from the yaml config file, overwrite it when calling the model to generate
+    overrides = {k: v for k, v in _collect_model_overrides(args).items() if v is not None}
+    cfg.update(overrides)
+
+    return cfg
 
 def decoding(
     checkpoint_path: str | Path,
@@ -81,22 +133,11 @@ def decoding(
 def main():
     args = parse_args()
 
-    cfg: dict | None = None
-    if args.config is not None:
-        with open(args.config, "r") as f:
-            cfg = yaml.safe_load(f) or {}
-    else:
-        raise ValueError("Missing model config. Pass --config path/to/train_config.yaml")
+    cfg = _build_generation_config(args)
 
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         args.device = "cpu"
     device = torch.device(args.device)
-
-    if cfg.get("d_ff") is None:
-        if cfg.get("ff_dimension") is not None:
-            cfg["d_ff"] = int(cfg["ff_dimension"])
-        elif cfg.get("hidden_dimension") is not None:
-            cfg["d_ff"] = 4 * int(cfg["hidden_dimension"])
 
     generation = decoding(
         checkpoint_path=args.checkpoint,
