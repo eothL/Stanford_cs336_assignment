@@ -8,6 +8,9 @@ import os
 
 
 def load_model(config, save_checkpoint_path, device):
+    if config.get("d_ff") is None:
+        config["d_ff"] = 4*config.get("hidden_dimension")
+
     LM = TransformerLM(
         vocab_size=config["vocab_size"],
         d_model=config["hidden_dimension"],
