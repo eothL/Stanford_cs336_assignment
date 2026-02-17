@@ -40,17 +40,44 @@ def get_batch(tokens, batch_size, context_length, device):
     # convert to torch tensor 
     return torch.from_numpy(x).to(device),torch.from_numpy(y).to(device)
 
-def save_checkpoint(model: torch.nn.Module, optimizer : torch.optim.Optimizer, iteration: int, out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]):
-    checkpoint = { 
+def save_checkpoint(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer | None,
+    iteration: int,
+    out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
+    include_optimizer: bool = True,
+):
+    checkpoint = {
         "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "iteration": iteration
+        "iteration": iteration,
     }
+    if include_optimizer and optimizer is not None:
+        checkpoint["optimizer_state_dict"] = optimizer.state_dict()
+
+    # Add .tmp to partially written checkpoint and replace it if the file is fully saved
+    if isinstance(out, (str, os.PathLike)): # replace works only for these types
+        out_path = os.fspath(out)
+        tmp_path = f"{out_path}.tmp"
+        torch.save(checkpoint, tmp_path)
+        os.replace(tmp_path, out_path) # rename the file to out_path file name
+        return
+
     torch.save(checkpoint, out)
 
-def load_checkpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes], model : torch.nn.Module, optimizer: torch.optim.Optimizer):
+def load_checkpoint(
+    src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+):
     ckpt = torch.load(src)
     model.load_state_dict(ckpt["model_state_dict"])
+
+    # some checkpoint doesn't store the optimizer state 
+    if "optimizer_state_dict" not in ckpt:
+        raise KeyError(
+            "optimizer_state_dict missing in checkpoint. "
+            "This checkpoint was likely saved with --save-optimizer-state = False."
+        )
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
     return ckpt["iteration"]
 
@@ -161,7 +188,10 @@ def parse_args():
     parser.add_argument("--seed", type = int, default = 93)
     parser.add_argument("--run-name", default = "Transformer_LM_from_scratch" )
     parser.add_argument("--run-number",type = int, default = 1)
-    parser.add_argument("--save-every", type = int, default = 1000)
+    parser.add_argument("--save-every", type = int, default = 1000) 
+
+    # save optimizer state or not 
+    parser.add_argument("--save-optimizer-state", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-token-processed", type= int, default= None)
 
     # hyperparameter
@@ -267,7 +297,7 @@ def train():
 
     ## experiment folder
     exp_folder_name = f"experiment_{run_name}"
-    exp_path = os.path.join(artifacts_path,exp_folder_name) if args.out_dir is None else args.out_dir
+    exp_path = os.path.join(artifacts_path, exp_folder_name) if args.out_dir is None else args.out_dir
     os.makedirs(exp_path, exist_ok= True)
 
     run = wandb.init(
@@ -349,14 +379,26 @@ def train():
             best_val = val_loss
             if best_val < 6.0:
                 result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
-                save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
+                save_checkpoint(
+                    model=LM,
+                    optimizer=optimizer,
+                    iteration=epoch,
+                    out=result_path,
+                    include_optimizer=args.save_optimizer_state,
+                )
                 print(f" New best val {best_val: .4f}. Saved {result_path}")
             wandb.log({ "best_val_loss": best_val })
 
         if args.save_every and epoch % args.save_every == 0:
             result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
             checkpoint_path = result_path
-            save_checkpoint(model = LM, optimizer = optimizer, iteration = epoch, out = result_path)
+            save_checkpoint(
+                model=LM,
+                optimizer=optimizer,
+                iteration=epoch,
+                out=result_path,
+                include_optimizer= args.save_optimizer_state,
+            )
             print(f"checkpoint saved : { checkpoint_path}")
 
         if limited_tokens and total_token_processed >= max_token_processed:

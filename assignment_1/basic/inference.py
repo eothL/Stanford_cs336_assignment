@@ -27,6 +27,7 @@ def load_model(config, save_checkpoint_path, device):
     )
 
     ckpt = torch.load(save_checkpoint_path, map_location=device)
+    
     LM.load_state_dict(ckpt["model_state_dict"])
     LM.eval()
     return LM
