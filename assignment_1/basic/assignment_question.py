@@ -516,18 +516,56 @@ number of trainable paramater =                                                 
             w1: d_model * d_ff = 1600 * 6400                = 10 240 000        + 6400
             w3: d_model * d_ff = 1600 * 6400                = 10 240 000        + 6400
             w2: d_ff * d_model = 6400 * 1600                = 10 240 000        + 1600
-        ----------------------------------------------------------------
+        ------------------------------------------------------------------------------
                                                             = 40 963 200 * 48   + 20 800 * 48
                                                             = 1 966 233 600.    + 998 400
-    -------------------------------------------------------------------------
-                                                            = 1,9 B + 80 M 
-                                                            = 2 046 644 800
-                                                            = 2 B parameters    + 1 M bias parameters
+        ------------------------------------------------------------------------------
+    RMSNorm: d_model                                        = 1600              + 1600
+    Output layer: d_model * vocab_size = 50257 * 1600       = 80 411 200        + 50257
+    -------------------------------------------------------------------------------------
+                                                            = 1,9 B + 2*80 M 
+                                                            = 2 126 644 800
+                                                            = 2,1 B parameters    + 1 M bias parameters
 if one parameter is represented in single precision floating point meaning FP32 or 32 bits(4 bytes):
-it will require more than 8GB of memory in FP32
+it will require more than 8,4GB of memory in FP32
 in FP8, we could go down to 2GB of memory.                                                            
 
+Formula with:
+- V : vocab_size
+- D : hidden dimension
+- F : FFN dimension which is usually 4 times or 8/3 the hidden dimension
+- L : number of layers
 
+bias parameter off for every layer 
+number of trainable paramater =                                                 if we add bias parameter
+    Embedding layer : vocab_size * d_model                  = V * D        
+    embedding_dim : dimension of embedding vector = d_model
+    Transformer Block : num_layers = 48
+        RMSnorm 1: d_model                                  = D                 
+        MHA_self_attention: num_heads = 25
+            q_proj :   d_model * d_model = 1600 * 1600      = D**2              + D
+                per head size: (num_head, d_model//num_heads)
+            k_proj :   d_model * d_model = 1600 * 1600      = D**2              + D
+                per head size: (num_head, d_model//num_heads)
+            v_proj :   d_model * d_model = 1600 * 1600      = D**2              + D
+                per head size: (num_head, d_model//num_heads)
+            o_proj :   d_model * d_model = 1600 * 1600      = D**2              + D
+        RMSnorm 2: d_model                                  = D
+        positionwise - FFN:
+            w1: d_model * d_ff = 1600 * 6400                = D*F               + F
+            w3: d_model * d_ff = 1600 * 6400                = D*F               + F
+            w2: d_ff * d_model = 6400 * 1600                = F*D               + D
+        ---------------------------------------------------------------------
+                                                            = 2D + 4D**2 + 3D*F + [5D + 2 F] 
+                                        if F = 4D           = 2D + 12D**2 + [13D]
+        ------------------------------------------------------------------------------
+    RMSNorm: d_model                                        = D                 
+    Output layer: d_model * vocab_size = 50257 * 1600       = V*D               + V
+    -------------------------------------------------------------------------
+                                                            = 2VD + D + L(2D + 4D^2 + 3D*F) + [L(6D + 2 F) + V]         
+                                        if F = 4D           = 2VD + D + L(2D + 12D^2) + [14DL + V]
+    output untied to input                              P   = 2 VD + D + L(12D^2 + 2D)
+    output tied to input                                P_t = VD + D + L(12D^2 + 2D)
 b) sequence has context_length tokens : d = context_length
 a matrix multiplication of (m,n)*(n,p) requires 2mnp FLOPs
 a matrix scalar multiplication of (m,n) require mn FLOPs
