@@ -6,6 +6,10 @@ from jaxtyping import Float, Int
 from collections.abc import Callable, Iterable
 from typing import Optional 
 
+DEFAULT_INIT_STD = 0.02
+
+def _init_trunc_normal(tensor: Tensor, std: float = DEFAULT_INIT_STD) -> None:
+    nn.init.trunc_normal_(tensor, mean=0.0, std=std, a=-2 * std, b=2 * std)
 
 class Linear(nn.Module):
     """ 
@@ -34,9 +38,9 @@ class Linear(nn.Module):
         self.weight = nn.Parameter(torch.empty((out_features,in_features), **self.factory_kwargs)) 
         self.bias = nn.Parameter(torch.empty((out_features,), **self.factory_kwargs)) if bias is True else None
 
-        nn.init.trunc_normal_(self.weight)
+        _init_trunc_normal(self.weight)
         if self.bias is not None:
-            nn.init.trunc_normal_(self.bias) 
+            _init_trunc_normal(self.bias) 
 
     def forward(self, x:Float[Tensor, "... in_features"]) -> Float[Tensor, "... out_features"]:
         if self.bias is not None:
@@ -69,7 +73,7 @@ class Embedding(nn.Module):
         self.embedding_dim = embedding_dim
         self.weight = nn.Parameter(torch.empty((num_embeddings, embedding_dim), **self.factory_kwargs))
         
-        nn.init.trunc_normal_(self.weight) # fill the matrix from truncated normal distribution between -3 sigma and 3 sigma
+        _init_trunc_normal(self.weight) # fill the matrix from truncated normal distribution between -3 sigma and 3 sigma
     
     def forward(self, token_ids: Int[Tensor, "..."]) -> torch.Tensor:
         return self.weight[token_ids]
@@ -95,7 +99,7 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.weights = nn.Parameter(torch.empty((d_model,),**self.factory_kwargs))
         
-        nn.init.trunc_normal_(self.weights)
+        nn.init.ones_(self.weights)
 
     def forward(self, x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
         # prevent overflow when applying square to input convert input to float 32
@@ -121,10 +125,6 @@ class positionwise_feedforward(nn.Module):
         self.w1_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs, bias=bias)
         self.w3_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs, bias=bias)
         self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
-
-        nn.init.trunc_normal_(self.w1_proj.weight)
-        nn.init.trunc_normal_(self.w2_proj.weight)
-        nn.init.trunc_normal_(self.w3_proj.weight)
     
     @staticmethod
     def SiLU(x:Float[Tensor, "..."])-> Float[Tensor, "..."]:
