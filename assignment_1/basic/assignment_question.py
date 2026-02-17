@@ -557,15 +557,15 @@ number of trainable paramater =                                                 
             w2: d_ff * d_model = 6400 * 1600                = F*D               + D
         ---------------------------------------------------------------------
                                                             = 2D + 4D**2 + 3D*F + [5D + 2 F] 
-                                        if F = 4D           = 2D + 12D**2 + [13D]
+                                        if F = 4D           = 2D + 16D**2 + [13D]
         ------------------------------------------------------------------------------
     RMSNorm: d_model                                        = D                 
     Output layer: d_model * vocab_size = 50257 * 1600       = V*D               + V
     -------------------------------------------------------------------------
                                                             = 2VD + D + L(2D + 4D^2 + 3D*F) + [L(6D + 2 F) + V]         
-                                        if F = 4D           = 2VD + D + L(2D + 12D^2) + [14DL + V]
-    output untied to input                              P   = 2 VD + D + L(12D^2 + 2D)
-    output tied to input                                P_t = VD + D + L(12D^2 + 2D)
+                                        if F = 4D           = 2VD + D + L(2D + 16D^2) + [14DL + V]
+    output untied to input                              P   = 2 VD + D + L(16D^2 + 2D)
+    output tied to input                                P_t = VD + D + L(16D^2 + 2D)
 b) sequence has context_length tokens : d = context_length
 a matrix multiplication of (m,n)*(n,p) requires 2mnp FLOPs
 a matrix scalar multiplication of (m,n) require mn FLOPs
