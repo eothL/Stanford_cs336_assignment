@@ -296,6 +296,9 @@ def train():
     if args.tied_embedding is True:
         run_name ="_".join([run_name,"tied"])
 
+    if args.use_qk_norm is True:
+        run_name= "_".join([run_name, "qknorm"])
+
     # file 
     artifacts_folder = "artifacts"
     HERE = os.path.dirname(os.path.abspath(__file__))
