@@ -63,12 +63,13 @@ def generate_token_id(LM:TransformerLM, prompt:str, tokenizer: Tokenizer, temper
     prompt_len = len(seq_id)
     softmax = model.Softmax(dim=-1)
     device = next(LM.parameters()).device
-
+    context_len = int(LM.context_length)
     stop_token_id = tokenizer.encode(stop_token)[0]
 
     with torch.no_grad():
         for _ in range (max_tokens):
-            x: Float[Tensor, "T"] = torch.tensor(seq_id, dtype=torch.long, device=device)
+            model_input_ids = seq_id[-context_len:] # sliding window context
+            x: Float[Tensor, "T"] = torch.tensor(model_input_ids, dtype=torch.long, device=device)
             logits:Float[Tensor, "V"] = LM(x)
             next_token_id = int(sample_next_tokens(logits = logits[-1, :], temperature=temperature, softmax= softmax, top_p=top_p)) # last position
             seq_id.append(next_token_id)
