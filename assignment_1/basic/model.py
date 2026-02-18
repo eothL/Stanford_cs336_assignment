@@ -240,7 +240,13 @@ class scaled_dot_product_attention(nn.Module):
         super().__init__()
         self.mask = mask.to(device=device) if mask is not None else None
         
-    def forward(self, Q:Float[Tensor, "... seq_len d_k"], K:Float[Tensor, "... seq_len d_k"], V: Float[Tensor, "... seq_len d_v"], tau:Float,) -> Float[Tensor, "... seq_len d_v"]:
+    def forward(
+        self,
+        Q: Float[Tensor, "... seq_len d_k"],
+        K: Float[Tensor, "... seq_len d_k"],
+        V: Float[Tensor, "... seq_len d_v"],
+        tau: Float[Tensor, ""] | None = None,
+    ) -> Float[Tensor, "... seq_len d_v"]:
         d_k = Q.shape[-1]
         softmax = Softmax(dim=-1)
         if tau is not None:
