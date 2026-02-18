@@ -266,6 +266,8 @@ def train():
     args = parse_args()
     args.betas = tuple(args.betas) # convert it as a tuple because args. will return a list
     device = torch.device(args.device)
+    if device.type == "cuda": torch.set_float32_matmul_precision("high")
+
     epochs = args.epochs
     batch_size = args.batch_size
     lr_min = args.lr_min
