@@ -68,8 +68,8 @@ def generate_token_id(LM:TransformerLM, prompt:str, tokenizer: Tokenizer, temper
 
     with torch.no_grad():
         for _ in range (max_tokens):
-            model_input_ids = seq_id[-context_len:] # sliding window context
-            x: Float[Tensor, "T"] = torch.tensor(model_input_ids, dtype=torch.long, device=device)
+            sliding_window_ids = seq_id[-context_len:] # sliding window context
+            x: Float[Tensor, "T"] = torch.tensor(sliding_window_ids, dtype=torch.long, device=device)
             logits:Float[Tensor, "V"] = LM(x)
             next_token_id = int(sample_next_tokens(logits = logits[-1, :], temperature=temperature, softmax= softmax, top_p=top_p)) # last position
             seq_id.append(next_token_id)
