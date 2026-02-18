@@ -365,6 +365,8 @@ def train():
     best_val = float("inf")
     total_token_processed = 0
     start = time.time()
+
+    LM = torch.compile(LM)
     for epoch in range(epochs):
         epoch_start = time.time()
         # forward
