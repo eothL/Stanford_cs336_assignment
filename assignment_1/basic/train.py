@@ -294,6 +294,8 @@ def train():
     run_number = args.run_number
     if args.tied_embedding is True:
         run_name ="_".join([run_name, "tied"])
+    if args.compile is True:
+        run_name = "_".join([run_name, "cpl"])
 
     # file 
     artifacts_folder = "artifacts"
@@ -345,10 +347,10 @@ def train():
     optimizer = model.AdamW(LM.parameters(), lr = args.lr_max, betas= args.betas, weight_decay=args.weight_decay)
     loss_fcn = model.cross_entropy
 
-    if args.compiled is True:
+    if args.compile is True:
         LM = torch.compile(LM,mode="reduce-overhead", dynamic= False)
-        run_name = "_".joint([run_name, "cpl"])
-        
+
+
     total_params = sum(p.numel() for p in LM.parameters())
     print(f"Model parameters: {total_params}")
     wandb.log({"model_params": total_params})
