@@ -194,6 +194,7 @@ def parse_args():
     parser.add_argument("--run-name", default = "Transformer_LM_from_scratch" )
     parser.add_argument("--run-number",type = int, default = 1)
     parser.add_argument("--save-every", type = int, default = 1000) 
+    parser.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True)
 
     # save optimizer state or not 
     parser.add_argument("--save-optimizer-state", action=argparse.BooleanOptionalAction, default=True)
@@ -344,6 +345,8 @@ def train():
     optimizer = model.AdamW(LM.parameters(), lr = args.lr_max, betas= args.betas, weight_decay=args.weight_decay)
     loss_fcn = model.cross_entropy
 
+    LM = torch.compile(LM,mode="reduce-overhead", dynamic= False, disable=~args.compile) # True if we want to compile = disable is False -> instead of doing a if condition
+
     total_params = sum(p.numel() for p in LM.parameters())
     print(f"Model parameters: {total_params}")
     wandb.log({"model_params": total_params})
@@ -365,8 +368,7 @@ def train():
     best_val = float("inf")
     total_token_processed = 0
     start = time.time()
-
-    LM = torch.compile(LM)
+    
     for epoch in range(epochs):
         epoch_start = time.time()
         # forward
