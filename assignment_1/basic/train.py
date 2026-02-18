@@ -83,18 +83,19 @@ def load_checkpoint(
 
 class TransformerLM(nn.Module):
     def __init__(self, 
-                vocab_size,
-                d_model,
-                device,
-                num_layers, 
-                num_heads,
-                d_ff, 
-                context_length, 
-                rope_theta, 
-                bias, 
-                remove_rope,
-                remove_rmsnorm,
-                use_post_norm,
+                vocab_size:int,
+                d_model:int,
+                num_layers:int, 
+                num_heads:int,
+                d_ff:int, 
+                context_length:int, 
+                rope_theta:float, 
+                remove_rope:bool,
+                remove_rmsnorm:bool,
+                use_post_norm:bool,
+                bias:bool, 
+                tied_embedding:bool=False,
+                device:torch.device | None = None,
                 ):
         super().__init__()
         self.context_length = context_length
@@ -113,9 +114,13 @@ class TransformerLM(nn.Module):
                 use_post_norm=use_post_norm
                 ) for _ in range(num_layers)])
         
+        self.lm_head = model.Linear(in_features=d_model, out_features=vocab_size, device= device, bias=bias)
+        if tied_embedding is True:
+            self.lm_head.weight =self.embedding.weight
+
         self.head = nn.Sequential(
             model.RMSNorm(d_model=d_model, device=device),
-            model.Linear(in_features=d_model, out_features=vocab_size, device=device, bias = bias)
+            self.lm_head
         )
     
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
@@ -217,6 +222,7 @@ def parse_args():
     parser.add_argument("--cosine-cycle-iters", type= int, default=21)
     
     ## Architecture
+    parser.add_argument("--tied-embedding", action=argparse.BooleanOptionalAction, default=False)
     # if mentionned, it will be true and activated
     parser.add_argument("--use-post-norm", action="store_true")
     parser.add_argument("--remove-rope", action="store_true")
@@ -285,6 +291,8 @@ def train():
         args.run_name = auto_run_name(args)
     run_name = "_".join([args.run_name, dataset_name]) 
     run_number = args.run_number
+    if args.tied_embedding is True:
+        run_name ="_".join([run_name,"tied"])
 
     # file 
     artifacts_folder = "artifacts"
@@ -319,6 +327,7 @@ def train():
         "num_layers" : args.num_layers,
         "num_heads" : args.num_heads,
         "rope_theta" : args.rope_theta,
+        "tied_embedding": args.tied_embedding,
         "device": device,
         "bias" : args.use_bias,
         "remove_rope" : args.remove_rope,

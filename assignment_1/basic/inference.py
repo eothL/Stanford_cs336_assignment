@@ -21,6 +21,7 @@ def load_model(config, save_checkpoint_path, device):
         context_length=config["context_length"],
         rope_theta=config["rope_theta"],
         bias=config["use_bias"],
+        tied_embedding=config["tied_embedding"],
         remove_rope=config["remove_rope"],
         remove_rmsnorm=config["remove_rmsnorm"],
         use_post_norm=config["use_post_norm"],
