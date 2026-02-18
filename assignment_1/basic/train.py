@@ -195,8 +195,8 @@ def parse_args():
     parser.add_argument("--run-number",type = int, default = 1)
     parser.add_argument("--save-every", type = int, default = 1000) 
     parser.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--compile-mode", type=str, default = "default")
-    parser.add_argument("--loat32-matmul-precision", type=str, default = "high")
+    parser.add_argument("--compile-mode", type=str, choices= ["default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"], default = "default")
+    parser.add_argument("--float32-matmul-precision", type=str, default = "high")
     # save optimizer state or not 
     parser.add_argument("--save-optimizer-state", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-token-processed", type= int, default= None)
@@ -269,9 +269,10 @@ def train():
     device = torch.device(args.device)
     if device.type == "cuda": 
         torch.set_float32_matmul_precision(args.float32_matmul_precision)
-        if args.float32_matmul_precision == "highest":
-            # torch.backends.cuda.matmul.allow_tf32 = False this one is redundant as float32==highest already do it
-            torch.backends.cudnn.allow_tf32 = False # do it for cuDNN ops (mainly convolutions operation)
+        torch.backends.cudnn.allow_tf32 = False # do it for cuDNN ops (mainly convolutions operation)
+        # if args.float32_matmul_precision == "highest":
+        #    torch.backends.cuda.matmul.allow_tf32 = False this one is redundant as float32==highest already do it
+            
     epochs = args.epochs
     batch_size = args.batch_size
     lr_min = args.lr_min
