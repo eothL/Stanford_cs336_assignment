@@ -5,4 +5,4 @@ python -m basic.generate \
   --config configs/train_owt_medium.yaml \
   --prompt "Once upon a time" \
   --seed 93 \
-  --max-tokens 10000 
+  --max-tokens 500
