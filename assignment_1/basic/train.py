@@ -293,8 +293,9 @@ def train():
     run_name = "_".join([args.run_name, dataset_name]) 
     run_number = args.run_number
     if args.tied_embedding is True:
-        run_name ="_".join([run_name,"tied"])
-
+        run_name ="_".join([run_name, "tied"])
+    if args.compiled is True:
+        run_name = "_".joint([run_name, "cpl"])
     # file 
     artifacts_folder = "artifacts"
     HERE = os.path.dirname(os.path.abspath(__file__))
