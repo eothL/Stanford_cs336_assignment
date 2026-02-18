@@ -99,7 +99,7 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.weights = nn.Parameter(torch.empty((d_model,),**self.factory_kwargs))
         
-        nn.init.ones_(self.weights)
+        _init_trunc_normal(self.weights)
 
     def forward(self, x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
         # prevent overflow when applying square to input convert input to float 32
