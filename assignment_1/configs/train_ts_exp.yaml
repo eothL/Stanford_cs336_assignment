@@ -18,7 +18,6 @@ save_every: 10000
 save_optimizer_state: false
 vocab_size: 10000
 hidden_dimension: 512
-ff_dimension: 1344
 num_layers: 4
 num_heads: 16
 rope_theta: 10000.0
