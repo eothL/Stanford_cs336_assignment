@@ -195,7 +195,8 @@ def parse_args():
     parser.add_argument("--run-number",type = int, default = 1)
     parser.add_argument("--save-every", type = int, default = 1000) 
     parser.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True)
-
+    parser.add_argument("--compile-mode", type=str, default = "default")
+    parser.add_argument("--loat32-matmul-precision", type=str, default = "high")
     # save optimizer state or not 
     parser.add_argument("--save-optimizer-state", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-token-processed", type= int, default= None)
@@ -266,8 +267,11 @@ def train():
     args = parse_args()
     args.betas = tuple(args.betas) # convert it as a tuple because args. will return a list
     device = torch.device(args.device)
-    if device.type == "cuda": torch.set_float32_matmul_precision("high")
-
+    if device.type == "cuda": 
+        torch.set_float32_matmul_precision(args.float32_matmul_precision)
+        if args.float32_matmul_precision == "highest":
+            # torch.backends.cuda.matmul.allow_tf32 = False this one is redundant as float32==highest already do it
+            torch.backends.cudnn.allow_tf32 = False # do it for cuDNN ops (mainly convolutions operation)
     epochs = args.epochs
     batch_size = args.batch_size
     lr_min = args.lr_min
@@ -297,7 +301,7 @@ def train():
     if args.tied_embedding is True:
         run_name ="_".join([run_name, "tied"])
     if args.compile is True:
-        run_name = "_".join([run_name, "cpl"])
+        run_name = "_".join([run_name, "cpl", args.compile_mode])
 
     # file 
     artifacts_folder = "artifacts"
@@ -350,8 +354,9 @@ def train():
     loss_fcn = model.cross_entropy
 
     if args.compile is True:
-        LM = torch.compile(LM,mode="reduce-overhead", dynamic= False)
-
+        LM_compil = torch.compile(LM, mode= args.compile_mode, dynamic= False)
+    else:
+        LM_compil = LM # no compil but keep the same name for simplicity
 
     total_params = sum(p.numel() for p in LM.parameters())
     print(f"Model parameters: {total_params}")
@@ -379,7 +384,7 @@ def train():
         epoch_start = time.time()
         # forward
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
-        train_loss = run_epoch(LM=LM, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True)
+        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True)
         val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, optimizer=optimizer, device = device, training = False)
         total_token_processed += batch_size * context_length
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
