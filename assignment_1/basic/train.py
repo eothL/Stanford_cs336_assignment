@@ -93,6 +93,7 @@ class TransformerLM(nn.Module):
                 remove_rope:bool,
                 remove_rmsnorm:bool,
                 use_post_norm:bool,
+                use_qk_norm:bool,
                 bias:bool, 
                 tied_embedding:bool=False,
                 device:torch.device | None = None,
@@ -228,6 +229,7 @@ def parse_args():
     parser.add_argument("--remove-rope", action="store_true")
     parser.add_argument("--remove-rmsnorm", action="store_true")
     parser.add_argument("--use-bias", action="store_true")
+    parser.add_argument("--use-qk-norm", action="store_true")
 
     parser.add_argument("--config", type= str, default= None)
     # read yaml config 
@@ -333,6 +335,7 @@ def train():
         "remove_rope" : args.remove_rope,
         "remove_rmsnorm" : args.remove_rmsnorm,
         "use_post_norm" : args.use_post_norm,
+        "use_qk_norm" : args.use_qk_norm
         }
 
     if args.seed:

@@ -78,6 +78,13 @@ class Embedding(nn.Module):
     def forward(self, token_ids: Int[Tensor, "..."]) -> torch.Tensor:
         return self.weight[token_ids]
 
+def rms_normalize(input:torch.Tensor, eps:float=1e-5):
+    # prevent overflow when applying square to input convert input to float 32
+    in_dtype = input.dtype 
+    x_fp32 = input.to(torch.float32) # prevent overflow for low precision
+    mean_square = x_fp32.pow(2).mean(dim=-1, keepdim=True)
+    rms = x_fp32 * torch.rsqrt(mean_square+eps) #rsqrt is reverser sqrt 1/sqrt(X)
+    return rms.to(in_dtype)
 
 class RMSNorm(nn.Module):
     """
@@ -98,17 +105,11 @@ class RMSNorm(nn.Module):
         self.d_model =d_model
         self.eps = eps
         self.weights = nn.Parameter(torch.empty((d_model,),**self.factory_kwargs))
-        
+        # we can add bias
         nn.init.ones_(self.weights)
 
     def forward(self, x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
-        # prevent overflow when applying square to input convert input to float 32
-        in_dtype = x.dtype 
-        x_fp32 =x.to(torch.float32)
-        mean_square = x_fp32.pow(2).mean(dim=-1, keepdim=True)
-        RMS = torch.rsqrt(mean_square + self.eps) #rsqrt is reverser sqrt 1/sqrt(X)
-        result = x_fp32*self.weights*RMS
-        return result.to(in_dtype) 
+        return (self.weights * rms_normalize(input=x, eps=self.eps)).to(x.dtype)
     
 
 class positionwise_feedforward(nn.Module):
@@ -238,11 +239,14 @@ class scaled_dot_product_attention(nn.Module):
     def __init__(self, mask: Float[Tensor, "seq_len seq_len"] | None = None, device: torch.device | None = None):
         super().__init__()
         self.mask = mask.to(device=device) if mask is not None else None
-
-    def forward(self, Q:Float[Tensor, "... seq_len d_k"], K:Float[Tensor, "... seq_len d_k"], V: Float[Tensor, "... seq_len d_v"]) -> Float[Tensor, "... seq_len d_v"]:
+        
+    def forward(self, Q:Float[Tensor, "... seq_len d_k"], K:Float[Tensor, "... seq_len d_k"], V: Float[Tensor, "... seq_len d_v"], tau:Float,) -> Float[Tensor, "... seq_len d_v"]:
         d_k = Q.shape[-1]
         softmax = Softmax(dim=-1)
-        score = (Q @ K.transpose(-2,-1)) / math.sqrt(d_k) 
+        if tau is not None:
+            score = tau * (Q @ K.transpose(-2,-1)) / math.sqrt(d_k)
+        else: 
+            score = (Q @ K.transpose(-2,-1)) / math.sqrt(d_k)
         if self.mask is None:
             QK_compute = softmax(score)
         else:
@@ -250,9 +254,14 @@ class scaled_dot_product_attention(nn.Module):
             QK_compute = softmax(score)
         return QK_compute @ V
     
-
+def QK_Norm(Q:torch.Tensor, K:torch.Tensor, eps = 1e-5,UseNorm: bool=False):
+    if UseNorm is False:
+        return (Q,K)
+    else:
+        return (rms_normalize(Q,eps), rms_normalize(K,eps))
+    
 class multihead_self_attention(nn.Module):
-    def __init__(self, d_model: int,  num_heads, bias = False, device: torch.device | None = None):
+    def __init__(self, d_model: int,  num_heads, bias = False, device: torch.device | None = None, use_qk_norm: bool= False):
         super().__init__()
         self.d_k = self.d_v= d_model // num_heads
         self.device = device
@@ -260,6 +269,10 @@ class multihead_self_attention(nn.Module):
         self.k_proj = Linear(d_model, d_model, bias=bias, device=device)
         self.v_proj = Linear(d_model, d_model, bias=bias, device=device)
         self.o_proj = Linear(d_model, d_model, bias=bias, device=device)
+        
+        self.use_qk_norm = use_qk_norm
+        self.log_tau = nn.Parameter(torch.zeros(num_heads)) if use_qk_norm is True else None
+        # if we don't want a learned tau and fixed one, we can use use register_buffer
 
     def forward(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
@@ -275,14 +288,17 @@ class multihead_self_attention(nn.Module):
         Q_head:tuple[Float[Tensor, "... seq_len d_k"], ...] = torch.split(Q, int(self.d_k), dim=-1) # torch.split return tuple
         K_head:tuple[Float[Tensor, "... seq_len d_k"], ...] = torch.split(K, int(self.d_k), dim=-1)
         V_head:tuple[Float[Tensor, "... seq_len d_k"], ...] = torch.split(V, int(self.d_v), dim=-1)
-        
-        heads = []
 
-        for q_h,k_h,v_h in zip(Q_head, K_head, V_head):
+        heads = []
+        # for broadcasting as logits is [B, H, T, T]
+        tau = torch.exp(self.log_tau) if self.use_qk_norm else None 
+        for h, (q_h,k_h,v_h) in enumerate(zip(Q_head, K_head, V_head)):
             if rope is not None and token_positions is not None:
                 q_h:Float[Tensor, "... seq_len d_k"]= rope(q_h, token_positions) 
                 k_h:Float[Tensor, "... seq_len d_k"] = rope(k_h, token_positions)
-            heads.append(sdpa(q_h, k_h, v_h))
+            q_h, k_h = QK_Norm(Q = q_h, K = k_h, UseNorm = self.use_qk_norm)
+            tau_h = tau[h] if tau is not None else None
+            heads.append(sdpa(q_h, k_h, v_h, tau_h))
 
             
         context: Float[Tensor, "... seq_len d_model"] = torch.cat(heads, dim=-1) 
@@ -351,6 +367,7 @@ class transformer_block(nn.Module):
                 remove_rope : bool = False,
                 remove_rmsnorm : bool = False,
                 use_post_norm : bool = False,
+                use_qk_norm: bool = False,
                 ):
         super().__init__()
         self.device = device
@@ -363,7 +380,7 @@ class transformer_block(nn.Module):
         self.rmsnorm1 = Norm()
         self.rmsnorm2 = Norm()
 
-        self.MHA_layer = multihead_self_attention(d_model, num_heads, bias = bias, device = device)
+        self.MHA_layer = multihead_self_attention(d_model, num_heads, bias = bias, device = device, use_qk_norm=use_qk_norm)
         self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, bias = bias, device = device)
 
         self._forward_impl = self._forward_post if use_post_norm else self._forward_pre 
