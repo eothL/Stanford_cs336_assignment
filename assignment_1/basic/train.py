@@ -93,6 +93,7 @@ class TransformerLM(nn.Module):
                 remove_rope:bool,
                 remove_rmsnorm:bool,
                 use_post_norm:bool,
+                use_qk_norm:bool,
                 bias:bool, 
                 tied_embedding:bool=False,
                 device:torch.device | None = None,
@@ -111,7 +112,8 @@ class TransformerLM(nn.Module):
                 bias= bias,
                 remove_rope= remove_rope,
                 remove_rmsnorm= remove_rmsnorm,
-                use_post_norm=use_post_norm
+                use_post_norm=use_post_norm,
+                use_qk_norm=use_qk_norm,
                 ) for _ in range(num_layers)])
         
         self.lm_head = model.Linear(in_features=d_model, out_features=vocab_size, device= device, bias=bias)
@@ -148,7 +150,7 @@ def run_epoch(
         LM.eval()
         context = torch.no_grad()
     
-    total_loss = 0
+    total_loss = 0.0
     total_sample = 0
     with context:
         x, y = loader()
@@ -167,10 +169,11 @@ def run_epoch(
             optimizer.step()
 
         batch_size = logits.size(0)
-        total_loss += loss * batch_size
+        # if we use loss instead of loss.detach().item(), we will accumulate the tensors in the computation graph
+        total_loss += loss.detach().item() * batch_size 
         total_sample += batch_size
 
-    avg_loss = total_loss/total_sample
+    avg_loss = total_loss / total_sample
     return avg_loss
 
 
@@ -230,6 +233,7 @@ def parse_args():
     parser.add_argument("--remove-rope", action="store_true")
     parser.add_argument("--remove-rmsnorm", action="store_true")
     parser.add_argument("--use-bias", action="store_true")
+    parser.add_argument("--use-qk-norm", action="store_true")
 
     parser.add_argument("--config", type= str, default= None)
     # read yaml config 
@@ -304,6 +308,9 @@ def train():
     if args.compile is True:
         run_name = "_".join([run_name, "cpl", args.compile_mode])
 
+    if args.use_qk_norm is True:
+        run_name= "_".join([run_name, "qknorm"])
+
     # file 
     artifacts_folder = "artifacts"
     HERE = os.path.dirname(os.path.abspath(__file__))
@@ -343,6 +350,7 @@ def train():
         "remove_rope" : args.remove_rope,
         "remove_rmsnorm" : args.remove_rmsnorm,
         "use_post_norm" : args.use_post_norm,
+        "use_qk_norm" : args.use_qk_norm
         }
 
     if args.seed:
