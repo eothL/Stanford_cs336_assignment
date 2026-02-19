@@ -218,6 +218,7 @@ def parse_args():
     ## Optimizer
     parser.add_argument("--betas", nargs= 2, type=float, default=(0.9,0.99))
     parser.add_argument("--weight-decay", type = float, default=1e-2)
+    parser.add_argument("--cautious-decay", action=argparse.BooleanOptionalAction, default=False)
 
     ## Learning rate scheduler 
     parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
@@ -359,7 +360,13 @@ def train():
 
     # model initializing
     LM = TransformerLM(**model_cfg).to(device)
-    optimizer = model.AdamW(LM.parameters(), lr = args.lr_max, betas= args.betas, weight_decay=args.weight_decay)
+    optimizer = model.AdamW(
+        LM.parameters(),
+        lr=args.lr_max,
+        betas=args.betas,
+        weight_decay=args.weight_decay,
+        cautious_decay=args.cautious_decay,
+    )
     loss_fcn = model.cross_entropy
 
     if args.compile is True:

@@ -463,11 +463,35 @@ class SGD(torch.optim.Optimizer):
                 p.data -= lr/ math.sqrt(t+1) * grad # udpate weight tensor in-place
                 state["t"] = t+1  # Increament iteration number
         return loss
-    
 
+class CautiousWeightDecay:
+    @staticmethod
+    def apply_(param: Tensor, state: Tensor, lr: float, wd: float) -> None:
+        if wd == 0.0:
+            return
+
+        # Apply decoupled decay only where state and parameter share direction.
+        mask = (state * param) > 0
+        if torch.any(mask):
+            param.mul_(1 - lr * wd * mask.to(dtype=param.dtype))
+        
 class AdamW(torch.optim.Optimizer):
-    def __init__(self, params, lr=1e-3, betas = (0.9, 0.999), eps = 1e-8, weight_decay = 0.0):
-        defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay} 
+    def __init__(
+        self,
+        params,
+        lr=1e-3,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0.0,
+        cautious_decay: bool = False,
+    ):
+        defaults = {
+            "lr": lr,
+            "betas": betas,
+            "eps": eps,
+            "weight_decay": weight_decay,
+            "cautious_decay": cautious_decay,
+        } 
         super().__init__(params, defaults)
 
     @torch.no_grad()   
@@ -482,6 +506,7 @@ class AdamW(torch.optim.Optimizer):
             beta1, beta2 = group["betas"]
             eps = group["eps"]
             wd = group["weight_decay"]
+            cautious_decay = group["cautious_decay"]
 
             for p in group["params"]:
                 grad = p.grad
@@ -502,7 +527,10 @@ class AdamW(torch.optim.Optimizer):
                 v.mul_(beta2).addcmul_(grad, grad, value = 1 - beta2)# v = beta2 * v + (1 - beta2) * grad * grad
                 
                 step_size = lr * (math.sqrt(1 - beta2**t) / (1 - (beta1)**t))
-                p.data.mul_(1 - lr * wd)
+                if cautious_decay:
+                    CautiousWeightDecay.apply_(param=p.data, state=m, lr=lr, wd=wd)
+                else:
+                    p.data.mul_(1 - lr * wd)
                 p.data.addcdiv_(m, v.sqrt().add_(eps), value = -step_size)
                 state["m"] = m
                 state["v"] = v
