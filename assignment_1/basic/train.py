@@ -374,7 +374,7 @@ def train():
 
     total_params = sum(p.numel() for p in LM.parameters())
     print(f"Model parameters: {total_params}")
-    wandb.log({"model_params": total_params})
+    run.summary["model_params"] = total_params
 
     # loading data
     ## loading token from uint16.bin file
@@ -404,14 +404,23 @@ def train():
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
         epoch_time = time.time() - epoch_start
-        wandb.log(
-            { 
-                "train_loss": train_loss,
-                "val_loss": val_loss,
-                "lr": lr,
-                "epoch_time": epoch_time
-            }
-        )
+        log_payload = {
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "lr": lr,
+            "epoch_time": epoch_time,
+        }
+
+        if device.type == "cuda" and torch.cuda.is_available():
+            log_payload.update(
+                {
+                    "cuda_mem_alloc_mb": torch.cuda.memory_allocated(device=device) / 1024**2,
+                    "cuda_mem_reserved_mb": torch.cuda.memory_reserved(device=device) / 1024**2,
+                    "cuda_mem_peak_mb": torch.cuda.max_memory_allocated(device=device) / 1024**2,
+                }
+            )
+            torch.cuda.reset_peak_memory_stats(device=device)
 
         if val_loss < best_val:
             best_val = val_loss
@@ -425,7 +434,7 @@ def train():
                     include_optimizer=args.save_optimizer_state,
                 )
                 print(f" New best val {best_val: .4f}. Saved {result_path}")
-            wandb.log({ "best_val_loss": best_val })
+        log_payload["best_val_loss"] = best_val
 
         if args.save_every and epoch % args.save_every == 0:
             result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
@@ -439,13 +448,7 @@ def train():
             )
             print(f"checkpoint saved : { checkpoint_path}")
 
-        if torch.cuda.is_available():
-            wandb.log({
-                "cuda_mem_alloc_mb": torch.cuda.memory_allocated() / 1024**2,
-                "cuda_mem_reserved_mb": torch.cuda.memory_reserved() / 1024**2,
-                "cuda_mem_peak_mb": torch.cuda.max_memory_allocated() / 1024**2,
-            })
-            torch.cuda.reset_peak_memory_stats()
+        wandb.log(log_payload, step=epoch)
 
         if limited_tokens and total_token_processed >= max_token_processed:
             break 
@@ -453,7 +456,7 @@ def train():
     total_minute = (time.time() - start) / 60.0
 
     print(f"Training complete in { total_minute: .2f} min with the best val loss = {best_val}")
-    wandb.log({"total_training_time": total_minute})
+    run.summary["total_training_time_min"] = total_minute
     wandb.finish()
 
 if __name__=="__main__":
