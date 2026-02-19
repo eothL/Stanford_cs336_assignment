@@ -246,19 +246,32 @@ class scaled_dot_product_attention(nn.Module):
         K: Float[Tensor, "... seq_len d_k"],
         V: Float[Tensor, "... seq_len d_v"],
         tau: Float[Tensor, ""] | None = None,
-    ) -> Float[Tensor, "... seq_len d_v"]:
+        return_stats: bool = False,
+    ) -> Float[Tensor, "... seq_len d_v"] | tuple[Float[Tensor, "... seq_len d_v"], dict[str, Tensor]]:
         d_k = Q.shape[-1]
         softmax = Softmax(dim=-1)
         if tau is not None:
-            score = tau * (Q @ K.transpose(-2,-1)) / math.sqrt(d_k)
+            raw_score = tau * (Q @ K.transpose(-2,-1)) / math.sqrt(d_k)
         else: 
-            score = (Q @ K.transpose(-2,-1)) / math.sqrt(d_k)
+            raw_score = (Q @ K.transpose(-2,-1)) / math.sqrt(d_k)
+        score = raw_score
         if self.mask is None:
             QK_compute = softmax(score)
         else:
             score = score.masked_fill(self.mask==0, -1e4) #1/True = keep, 0/False = block, we can either use -torch.inf or -1e9 or -1e4 or torch.finfo(score.dtype).min
             QK_compute = softmax(score)
-        return QK_compute @ V
+        out = QK_compute @ V
+        if not return_stats:
+            return out
+
+        # Track raw score statistics separately from masked scores so causal masking does not dominate scale metrics.
+        attn_entropy = -(QK_compute * torch.log(QK_compute.clamp_min(1e-12))).sum(dim=-1).mean()
+        stats = {
+            "qk_score_std": raw_score.std().detach(), 
+            "qk_score_abs_mean": raw_score.abs().mean().detach(),
+            "attn_entropy": attn_entropy.detach(),
+        }
+        return out, stats
     
 def QK_Norm(Q:torch.Tensor, K:torch.Tensor, eps = 1e-5,UseNorm: bool=False):
     if UseNorm is False:
@@ -279,6 +292,8 @@ class multihead_self_attention(nn.Module):
         self.use_qk_norm = use_qk_norm
         self.log_tau = nn.Parameter(torch.zeros(num_heads)) if use_qk_norm is True else None
         # if we don't want a learned tau and fixed one, we can use use register_buffer
+        self.diagnostics_enabled = False
+        self.last_diag: dict[str, float] = {}
 
     def forward(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
@@ -296,6 +311,9 @@ class multihead_self_attention(nn.Module):
         V_head:tuple[Float[Tensor, "... seq_len d_k"], ...] = torch.split(V, int(self.d_v), dim=-1)
 
         heads = []
+        qk_score_std: list[Tensor] = []
+        qk_score_abs_mean: list[Tensor] = []
+        attn_entropy: list[Tensor] = []
         # for broadcasting as logits is [B, H, T, T]
         tau = torch.exp(self.log_tau) if self.use_qk_norm else None 
         for h, (q_h,k_h,v_h) in enumerate(zip(Q_head, K_head, V_head)):
@@ -304,10 +322,36 @@ class multihead_self_attention(nn.Module):
                 k_h:Float[Tensor, "... seq_len d_k"] = rope(k_h, token_positions)
             q_h, k_h = QK_Norm(Q = q_h, K = k_h, UseNorm = self.use_qk_norm)
             tau_h = tau[h] if tau is not None else None
-            heads.append(sdpa(q_h, k_h, v_h, tau_h))
+            if self.diagnostics_enabled:
+                head_out, head_stats = sdpa(q_h, k_h, v_h, tau_h, return_stats=True)
+                heads.append(head_out)
+                qk_score_std.append(head_stats["qk_score_std"])
+                qk_score_abs_mean.append(head_stats["qk_score_abs_mean"])
+                attn_entropy.append(head_stats["attn_entropy"])
+            else:
+                heads.append(sdpa(q_h, k_h, v_h, tau_h))
 
             
         context: Float[Tensor, "... seq_len d_model"] = torch.cat(heads, dim=-1) 
+        if self.diagnostics_enabled and qk_score_std:
+            qk_score_std_t = torch.stack(qk_score_std)
+            qk_score_abs_mean_t = torch.stack(qk_score_abs_mean)
+            attn_entropy_t = torch.stack(attn_entropy)
+            diag = {
+                "qk_score_std": qk_score_std_t.mean().item(),
+                "qk_score_std_max": qk_score_std_t.max().item(),
+                "qk_score_abs_mean": qk_score_abs_mean_t.mean().item(),
+                "attn_entropy": attn_entropy_t.mean().item(),
+                "attn_entropy_min": attn_entropy_t.min().item(),
+            }
+            if tau is not None:
+                diag["tau_mean"] = tau.mean().item()
+                diag["tau_min"] = tau.min().item()
+                diag["tau_max"] = tau.max().item()
+            self.last_diag = diag
+        else:
+            self.last_diag = {}
+
         return self.o_proj(context)    
 
 
@@ -517,5 +561,7 @@ def gradient_clipping(params: Iterable[torch.nn.Parameter], M: float, eps: float
     if clip_coef < 1:
         for g in grads:
             g.mul_(clip_coef)
-
-    return None
+    return {
+        "grad_norm_pre_clip": total_norm.detach().item(),
+        "grad_clip_coef": min(float(clip_coef.detach().item()), 1.0),
+    }

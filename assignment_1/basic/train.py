@@ -134,6 +134,38 @@ class TransformerLM(nn.Module):
         return logits
 
 
+def set_attention_diagnostics(module: nn.Module, enabled: bool) -> None:
+    for submodule in module.modules():
+        if isinstance(submodule, model.multihead_self_attention):
+            submodule.diagnostics_enabled = enabled
+            submodule.last_diag = {}
+
+
+def collect_attention_diagnostics(LM: TransformerLM) -> dict[str, float]:
+    logs: dict[str, float] = {}
+    layer_diags: list[dict[str, float]] = []
+
+    for layer_idx, block in enumerate(LM.transformer_blocks):
+        layer_diag = getattr(block.MHA_layer, "last_diag", {})
+        if not layer_diag:
+            continue
+        layer_diags.append(layer_diag)
+        for key, value in layer_diag.items():
+            logs[f"diag/layer_{layer_idx}/{key}"] = float(value)
+
+    if not layer_diags:
+        return logs
+
+    for key in layer_diags[0]:
+        values = [layer_diag[key] for layer_diag in layer_diags if key in layer_diag]
+        if values:
+            logs[f"diag/attn_summary/{key}_mean"] = float(np.mean(values))
+            logs[f"diag/attn_summary/{key}_max"] = float(np.max(values))
+            logs[f"diag/attn_summary/{key}_min"] = float(np.min(values))
+
+    return logs
+
+
 def run_epoch(
         LM: torch.nn.Module, 
         loader,
@@ -142,7 +174,8 @@ def run_epoch(
         lr: float | None = None ,
         device: torch.device | None = None,
         training = True,
-):
+        collect_step_stats: bool = False,
+) -> tuple[float, dict[str, float]]:
     if training :
         LM.train()
         context = torch.enable_grad()
@@ -152,6 +185,7 @@ def run_epoch(
     
     total_loss = 0.0
     total_sample = 0
+    step_stats: dict[str, float] = {}
     with context:
         x, y = loader()
         logits: Float[Tensor, "batch_size seq_len vocab_size"] = LM(x)
@@ -165,7 +199,9 @@ def run_epoch(
                 g["lr"] = lr
 
             loss.backward()
-            model.gradient_clipping(LM.parameters(), M = 1e-2)
+            clip_stats = model.gradient_clipping(LM.parameters(), M = 1e-2)
+            if collect_step_stats and clip_stats is not None:
+                step_stats.update(clip_stats)
             optimizer.step()
 
         batch_size = logits.size(0)
@@ -174,7 +210,7 @@ def run_epoch(
         total_sample += batch_size
 
     avg_loss = total_loss / total_sample
-    return avg_loss
+    return avg_loss, step_stats
 
 
 def parse_args():
@@ -200,6 +236,9 @@ def parse_args():
     parser.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--compile-mode", type=str, choices= ["default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"], default = "default")
     parser.add_argument("--float32-matmul-precision", type=str, default = "high")
+    parser.add_argument("--log-attention-diagnostics", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--attention-diagnostics-every", type=int, default=100)
+
     # save optimizer state or not 
     parser.add_argument("--save-optimizer-state", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-token-processed", type= int, default= None)
@@ -269,6 +308,11 @@ def auto_run_name(args):
 def train():
     # argument
     args = parse_args()
+
+    if args.log_attention_diagnostics and args.compile:
+        print("Disabling torch.compile because attention diagnostics require eager forward hooks/state.")
+        args.compile = False
+
     args.betas = tuple(args.betas) # convert it as a tuple because args. will return a list
     device = torch.device(args.device)
     if device.type == "cuda": 
@@ -359,6 +403,7 @@ def train():
 
     # model initializing
     LM = TransformerLM(**model_cfg).to(device)
+    set_attention_diagnostics(LM, enabled=args.log_attention_diagnostics)
     optimizer = model.AdamW(LM.parameters(), lr = args.lr_max, betas= args.betas, weight_decay=args.weight_decay)
     loss_fcn = model.cross_entropy
 
@@ -393,20 +438,43 @@ def train():
         epoch_start = time.time()
         # forward
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
-        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True)
-        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, optimizer=optimizer, device = device, training = False)
+        train_loss, train_step_stats = run_epoch(
+            LM=LM_compil,
+            loader=train_loader,
+            loss_fcn=loss_fcn,
+            optimizer=optimizer,
+            lr=lr,
+            device=device,
+            training=True,
+            collect_step_stats=args.log_attention_diagnostics,
+        )
+
+        diagnostics_log: dict[str, float] = {}
+        if args.log_attention_diagnostics:
+            diagnostics_log.update({f"diag/{k}": float(v) for k, v in train_step_stats.items()})
+            if epoch % args.attention_diagnostics_every == 0:
+                diagnostics_log.update(collect_attention_diagnostics(LM))
+
+        val_loss, _ = run_epoch(
+            LM=LM,
+            loader=val_loader,
+            loss_fcn=loss_fcn,
+            optimizer=optimizer,
+            device=device,
+            training=False,
+        )
         total_token_processed += batch_size * context_length
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
         epoch_time = time.time() - epoch_start
-        wandb.log(
-            { 
-                "train_loss": train_loss,
-                "val_loss": val_loss,
-                "lr": lr,
-                "epoch_time": epoch_time
-            }
-        )
+        metrics = {
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "lr": lr,
+            "epoch_time": epoch_time,
+        }
+        metrics.update(diagnostics_log)
+        wandb.log(metrics)
 
         if val_loss < best_val:
             best_val = val_loss
