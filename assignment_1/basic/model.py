@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 from torch import Tensor
-from jaxtyping import Float, Int
+from jaxtyping import Float, Int, Bool
 from collections.abc import Callable, Iterable
 from typing import Optional 
 
@@ -210,6 +210,11 @@ class RoPE(nn.Module):
         cos: Float[Tensor, "... seq_len d_k_half"] = self.cos_cached[token_positions]
         sin: Float[Tensor, "... seq_len d_k_half"] = self.sin_cached[token_positions]
 
+        # if x has extra leading dimension (e.g head dim), broadcast positional cos/sin across them
+        while cos.ndim < x.ndim : 
+            cos = cos.unsqueeze(-3)
+            sin = sin.unsqueeze(-3)
+            
         x_even: Float[Tensor, "... seq_len d_k_half"] = x[..., 0::2]
         x_odd: Float[Tensor, "... seq_len d_k_half"]  = x[..., 1::2]
 
@@ -236,26 +241,28 @@ class Softmax(nn.Module):
     
 
 class scaled_dot_product_attention(nn.Module):
-    def __init__(self, max_seq_len: int, device: torch.device | None = None,):
+    def __init__(self, max_seq_len: int | None = None, device: torch.device | None = None, mask: Bool[Tensor, " ... queries keys"] | None = None):
         super().__init__()
         self.device = device
         self.softmax = Softmax(dim=-1)
-
-        self.register_buffer("causal_mask", 
-                            torch.tril(torch.ones((max_seq_len, max_seq_len), dtype= torch.bool, device=device)), 
-                            persistent = False)
-        # mask:Float[Tensor, "seq_len seq_len"]| None = None,
+        if mask is None:
+            self.register_buffer("causal_mask", 
+                                torch.tril(torch.ones((max_seq_len, max_seq_len), dtype= torch.bool, device=device)), 
+                                persistent = False)
+        else:
+            self.causal_mask= mask
+            # mask:Float[Tensor, "seq_len seq_len"]| None = None,
         
     def forward(
         self,
         Q: Float[Tensor, "... seq_len d_k"],
         K: Float[Tensor, "... seq_len d_k"],
         V: Float[Tensor, "... seq_len d_v"],
-        seq_len: int,
+        seq_len: int | None = None,
         tau: Float[Tensor, ""] | None = None,
     ) -> Float[Tensor, "... seq_len d_v"]:
         d_k = Q.shape[-1]
-        mask = self.causal_mask[:seq_len, :seq_len]
+        mask = self.causal_mask[:seq_len, :seq_len] if seq_len is not None else self.causal_mask
         if tau is not None:
             score = tau * (Q @ K.transpose(-2,-1)) / math.sqrt(d_k)
         else: 
@@ -276,13 +283,14 @@ def QK_Norm(Q:torch.Tensor, K:torch.Tensor, eps = 1e-5,UseNorm: bool=False):
 class multihead_self_attention(nn.Module):
     def __init__(self, d_model: int,  num_heads:int, max_seq_len: int,bias:bool = False, device: torch.device | None = None, use_qk_norm: bool= False):
         super().__init__()
+        assert d_model % num_heads == 0
         self.d_k = self.d_v= d_model // num_heads
         self.device = device
         self.q_proj = Linear(d_model, d_model, bias=bias,device=device)
         self.k_proj = Linear(d_model, d_model, bias=bias, device=device)
         self.v_proj = Linear(d_model, d_model, bias=bias, device=device)
         self.o_proj = Linear(d_model, d_model, bias=bias, device=device)
-        
+        self.num_heads = num_heads
         self.use_qk_norm = use_qk_norm
         self.log_tau = nn.Parameter(torch.zeros(num_heads)) if use_qk_norm is True else None
         # if we don't want a learned tau and fixed one, we can use use register_buffer
@@ -297,24 +305,25 @@ class multihead_self_attention(nn.Module):
         K:Float[Tensor, "... seq_len d_model"] = self.k_proj(x)
         V:Float[Tensor, "... seq_len d_model"] = self.v_proj(x)
 
+        head_shape = torch.Size((*Q.shape[:-1], self.num_heads, self.d_k)) # ... seq_len H d_k
+        # reshaping to split into N head and swap seq_len and num_heads
+        Q_head: Float[Tensor, "... num_heads seq_len d_k"] = Q.reshape(head_shape).transpose(-2,-3)
+        K_head: Float[Tensor, "... num_heads seq_len d_k"] = K.reshape(head_shape).transpose(-2,-3)
+        V_head: Float[Tensor, "... num_heads seq_len d_k"] = V.reshape(head_shape).transpose(-2,-3)
 
-        Q_head:tuple[Float[Tensor, "... seq_len d_k"], ...] = torch.split(Q, int(self.d_k), dim=-1) # torch.split return tuple
-        K_head:tuple[Float[Tensor, "... seq_len d_k"], ...] = torch.split(K, int(self.d_k), dim=-1)
-        V_head:tuple[Float[Tensor, "... seq_len d_k"], ...] = torch.split(V, int(self.d_v), dim=-1)
+        if self.use_qk_norm:
+            lead_dim = Q_head.ndim - 3
+            tau = torch.exp(self.log_tau).view((*([1] * lead_dim), self.num_heads, 1, 1)) 
+        else:
+            tau = None
 
-        heads = []
-        # for broadcasting as logits is [B, H, T, T]
-        tau = torch.exp(self.log_tau) if self.use_qk_norm else None 
-        for h, (q_h,k_h,v_h) in enumerate(zip(Q_head, K_head, V_head)):
-            if rope is not None and token_positions is not None:
-                q_h:Float[Tensor, "... seq_len d_k"]= rope(q_h, token_positions) 
-                k_h:Float[Tensor, "... seq_len d_k"] = rope(k_h, token_positions)
-            q_h, k_h = QK_Norm(Q = q_h, K = k_h, UseNorm = self.use_qk_norm)
-            tau_h = tau[h] if tau is not None else None
-            heads.append(self.sdpa(q_h, k_h, v_h, seq_len=seq_len, tau=tau_h))
+        if rope is not None and token_positions is not None:
+            Q_head:Float[Tensor, "... num_heads seq_len d_k"]= rope(Q_head, token_positions) 
+            K_head:Float[Tensor, "... num_heads seq_len d_k"] = rope(K_head, token_positions)
+        Q_head, K_head = QK_Norm(Q = Q_head, K = K_head, UseNorm = self.use_qk_norm)
 
-            
-        context: Float[Tensor, "... seq_len d_model"] = torch.cat(heads, dim=-1) 
+        heads: Float[Tensor, "... num_heads seq_len d_k"] = self.sdpa(Q_head, K_head, V_head, seq_len=seq_len, tau=tau)
+        context: Float[Tensor, "... seq_len d_model"] = heads.movedim(-3,-2).reshape(*x.shape[:-1], self.num_heads * self.d_k)
         return self.o_proj(context)    
 
 

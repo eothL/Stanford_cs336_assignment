@@ -164,7 +164,7 @@ def run_multihead_self_attention(
         implementation with the given QKV projection weights and input features.
     """
     from basic.model import multihead_self_attention as MHA
-    layer = MHA(d_model=d_model, num_heads=num_heads, device = in_features.device)
+    layer = MHA(d_model=d_model, num_heads=num_heads, max_seq_len= in_features.size(-2),device = in_features.device)
     with torch.no_grad():
       layer.q_proj.weight.copy_(q_proj_weight)
       layer.k_proj.weight.copy_(k_proj_weight)
@@ -211,7 +211,7 @@ def run_multihead_self_attention_with_rope(
         implementation with the given QKV projection weights and input features.
     """
     from basic.model import multihead_self_attention, RoPE
-    layer = multihead_self_attention(d_model=d_model, num_heads=num_heads, device= in_features.device)
+    layer = multihead_self_attention(d_model=d_model, num_heads=num_heads, max_seq_len=max_seq_len,device= in_features.device)
     rope = RoPE(theta=theta, d_k=d_model//num_heads,max_seq_len=max_seq_len,device=in_features.device)
     with torch.no_grad():
       layer.q_proj.weight.copy_(q_proj_weight)
