@@ -139,6 +139,7 @@ def run_epoch(
         loader,
         loss_fcn,
         optimizer: torch.optim.Optimizer,
+        loss_accum_mode,
         lr: float | None = None ,
         device: torch.device | None = None,
         training = True,
@@ -170,10 +171,13 @@ def run_epoch(
 
         batch_size = logits.size(0)
         # if we use loss instead of loss.detach().item(), we will accumulate the tensors in the computation graph
-        total_loss += loss.detach().item() * batch_size 
+        if loss_accum_mode == "safe":
+            total_loss += loss.detach().item() * batch_size
+        else:
+            total_loss += loss * batch_size 
         total_sample += batch_size
 
-    avg_loss = total_loss / total_sample
+    avg_loss = (total_loss / total_sample).item() if torch.is_tensor(total_loss) else total_loss / total_sample
     return avg_loss
 
 
@@ -203,6 +207,7 @@ def parse_args():
     # save optimizer state or not 
     parser.add_argument("--save-optimizer-state", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-token-processed", type= int, default= None)
+    parser.add_argument("--loss-accum-mode", choices=["safe", "leaky"], default="safe")
 
     # hyperparameter
     parser.add_argument("--epochs", type= int, default = 100)
@@ -393,8 +398,8 @@ def train():
         epoch_start = time.time()
         # forward
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
-        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True)
-        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, optimizer=optimizer, device = device, training = False)
+        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True,loss_accum_mode=args.loss_accum_mode)
+        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, optimizer=optimizer, device = device, training = False, loss_accum_mode=args.loss_accum_mode)
         total_token_processed += batch_size * context_length
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
@@ -433,6 +438,14 @@ def train():
                 include_optimizer= args.save_optimizer_state,
             )
             print(f"checkpoint saved : { checkpoint_path}")
+
+        if torch.cuda.is_available():
+            wandb.log({
+                "cuda_mem_alloc_mb": torch.cuda.memory_allocated() / 1024**2,
+                "cuda_mem_reserved_mb": torch.cuda.memory_reserved() / 1024**2,
+                "cuda_mem_peak_mb": torch.cuda.max_memory_allocated() / 1024**2,
+            })
+            torch.cuda.reset_peak_memory_stats()
 
         if limited_tokens and total_token_processed >= max_token_processed:
             break 
