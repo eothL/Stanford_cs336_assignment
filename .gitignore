@@ -16,3 +16,7 @@ uv.lock
 *.pth
 .bin
 *.log
+
+wandb/
+**/wandb/
+*.wandb
