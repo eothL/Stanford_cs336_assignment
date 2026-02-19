@@ -236,21 +236,26 @@ class Softmax(nn.Module):
     
 
 class scaled_dot_product_attention(nn.Module):
-    def __init__(self, device: torch.device | None = None):
+    def __init__(self, max_seq_len: int, device: torch.device | None = None,):
         super().__init__()
         self.device = device
         self.softmax = Softmax(dim=-1)
 
+        self.register_buffer("causal_mask", 
+                            torch.tril(torch.ones((max_seq_len, max_seq_len), dtype= torch.bool, device=device)), 
+                            persistent = False)
+        # mask:Float[Tensor, "seq_len seq_len"]| None = None,
+        
     def forward(
         self,
         Q: Float[Tensor, "... seq_len d_k"],
         K: Float[Tensor, "... seq_len d_k"],
         V: Float[Tensor, "... seq_len d_v"],
-        mask:Float[Tensor, "seq_len seq_len"]| None = None,
+        seq_len: int,
         tau: Float[Tensor, ""] | None = None,
     ) -> Float[Tensor, "... seq_len d_v"]:
         d_k = Q.shape[-1]
-
+        mask = self.causal_mask[:seq_len, :seq_len]
         if tau is not None:
             score = tau * (Q @ K.transpose(-2,-1)) / math.sqrt(d_k)
         else: 
@@ -269,7 +274,7 @@ def QK_Norm(Q:torch.Tensor, K:torch.Tensor, eps = 1e-5,UseNorm: bool=False):
         return (rms_normalize(Q,eps), rms_normalize(K,eps))
     
 class multihead_self_attention(nn.Module):
-    def __init__(self, d_model: int,  num_heads, bias = False, device: torch.device | None = None, use_qk_norm: bool= False):
+    def __init__(self, d_model: int,  num_heads:int, max_seq_len: int,bias:bool = False, device: torch.device | None = None, use_qk_norm: bool= False):
         super().__init__()
         self.d_k = self.d_v= d_model // num_heads
         self.device = device
@@ -282,11 +287,10 @@ class multihead_self_attention(nn.Module):
         self.log_tau = nn.Parameter(torch.zeros(num_heads)) if use_qk_norm is True else None
         # if we don't want a learned tau and fixed one, we can use use register_buffer
 
-        self.sdpa = scaled_dot_product_attention(device=device)
+        self.sdpa = scaled_dot_product_attention(max_seq_len=max_seq_len, device=device)
 
     def forward(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
-        mask = torch.tril(torch.ones((seq_len,seq_len), dtype=torch.bool, device = x.device))
 
         # d_k = d_model//num_heads        
         Q:Float[Tensor, "... seq_len d_model"] = self.q_proj(x)
@@ -307,7 +311,7 @@ class multihead_self_attention(nn.Module):
                 k_h:Float[Tensor, "... seq_len d_k"] = rope(k_h, token_positions)
             q_h, k_h = QK_Norm(Q = q_h, K = k_h, UseNorm = self.use_qk_norm)
             tau_h = tau[h] if tau is not None else None
-            heads.append(self.sdpa(q_h, k_h, v_h, tau_h, mask))
+            heads.append(self.sdpa(q_h, k_h, v_h, seq_len=seq_len, tau=tau_h))
 
             
         context: Float[Tensor, "... seq_len d_model"] = torch.cat(heads, dim=-1) 
@@ -389,7 +393,7 @@ class transformer_block(nn.Module):
         self.rmsnorm1 = Norm()
         self.rmsnorm2 = Norm()
 
-        self.MHA_layer = multihead_self_attention(d_model, num_heads, bias = bias, device = device, use_qk_norm=use_qk_norm)
+        self.MHA_layer = multihead_self_attention(d_model, num_heads, max_seq_len, bias = bias, device = device, use_qk_norm=use_qk_norm)
         self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, bias = bias, device = device)
 
         self._forward_impl = self._forward_post if use_post_norm else self._forward_pre 
