@@ -140,6 +140,7 @@ def run_epoch(
         loss_fcn,
         optimizer: torch.optim.Optimizer,
         loss_accum_mode,
+        steps_per_epoch: int = 1,
         lr: float | None = None ,
         device: torch.device | None = None,
         training = True,
@@ -154,28 +155,29 @@ def run_epoch(
     total_loss = 0.0
     total_sample = 0
     with context:
-        x, y = loader()
-        logits: Float[Tensor, "batch_size seq_len vocab_size"] = LM(x)
-        # flatten matrices with view(-1) and reshape into vocab_size for x
-        loss = loss_fcn(predicted_logits= logits.view(-1, logits.size(-1)), targets= y.view(-1))
+        for _ in range(steps_per_epoch):
+            x, y = loader()
+            logits: Float[Tensor, "batch_size seq_len vocab_size"] = LM(x)
+            # flatten matrices with view(-1) and reshape into vocab_size for x
+            loss = loss_fcn(predicted_logits= logits.view(-1, logits.size(-1)), targets= y.view(-1))
 
-        if training:
-            optimizer.zero_grad(set_to_none=True) # cleaning grads from previous step
-            # updating learning rate 
-            for g in optimizer.param_groups:
-                g["lr"] = lr
+            if training:
+                optimizer.zero_grad(set_to_none=True) # cleaning grads from previous step
+                # updating learning rate 
+                for g in optimizer.param_groups:
+                    g["lr"] = lr
 
-            loss.backward()
-            model.gradient_clipping(LM.parameters(), M = 1e-2)
-            optimizer.step()
+                loss.backward()
+                model.gradient_clipping(LM.parameters(), M = 1e-2)
+                optimizer.step()
 
-        batch_size = logits.size(0)
-        # if we use loss instead of loss.detach().item(), we will accumulate the tensors in the computation graph
-        if loss_accum_mode == "safe":
-            total_loss += loss.detach().item() * batch_size
-        else:
-            total_loss += loss * batch_size 
-        total_sample += batch_size
+            batch_size = logits.size(0)
+            # if we use loss instead of loss.detach().item(), we will accumulate the tensors in the computation graph
+            if loss_accum_mode == "safe":
+                total_loss += loss.detach().item() * batch_size
+            else:
+                total_loss += loss * batch_size 
+            total_sample += batch_size
 
     avg_loss = (total_loss / total_sample).item() if torch.is_tensor(total_loss) else total_loss / total_sample
     return avg_loss
@@ -208,6 +210,7 @@ def parse_args():
     parser.add_argument("--save-optimizer-state", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--max-token-processed", type= int, default= None)
     parser.add_argument("--loss-accum-mode", choices=["safe", "leaky"], default="safe")
+    parser.add_argument("--steps-per-epoch", type=int, default=1)
 
     # hyperparameter
     parser.add_argument("--epochs", type= int, default = 100)
@@ -398,9 +401,9 @@ def train():
         epoch_start = time.time()
         # forward
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
-        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True,loss_accum_mode=args.loss_accum_mode)
-        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, optimizer=optimizer, device = device, training = False, loss_accum_mode=args.loss_accum_mode)
-        total_token_processed += batch_size * context_length
+        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True,loss_accum_mode=args.loss_accum_mode, steps_per_epoch=args.steps_per_epoch)
+        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, optimizer=optimizer, device = device, training = False, loss_accum_mode=args.loss_accum_mode, steps_per_epoch=args.steps_per_epoch)
+        total_token_processed += batch_size * context_length * args.steps_per_epoch
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
         epoch_time = time.time() - epoch_start
@@ -410,6 +413,7 @@ def train():
             "val_loss": val_loss,
             "lr": lr,
             "epoch_time": epoch_time,
+            "steps_per_epoch": args.steps_per_epoch,
         }
 
         if device.type == "cuda" and torch.cuda.is_available():
