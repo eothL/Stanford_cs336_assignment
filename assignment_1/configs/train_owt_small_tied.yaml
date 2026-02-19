@@ -13,7 +13,7 @@ out_dir: null
 device: "cuda"
 seed: 93
 run_number: 1
-save_every: 5000
+save_every: 10000
 save_optimizer_state: false # to reduce checkpoint 
 vocab_size: 32000
 hidden_dimension: 768
