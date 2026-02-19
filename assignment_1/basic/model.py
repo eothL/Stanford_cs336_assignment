@@ -226,7 +226,7 @@ class Softmax(nn.Module):
     For numerical stability, we will substract the largest value in the input tensor as softmax operation is invariant to adding any constant c to all inputs
     """
     
-    def __init__(self, dim: int):
+    def __init__(self, dim: int=-1):
         super().__init__()
         self.d_i = dim
 
@@ -236,28 +236,30 @@ class Softmax(nn.Module):
     
 
 class scaled_dot_product_attention(nn.Module):
-    def __init__(self, mask: Float[Tensor, "seq_len seq_len"] | None = None, device: torch.device | None = None):
+    def __init__(self, device: torch.device | None = None):
         super().__init__()
-        self.mask = mask.to(device=device) if mask is not None else None
-        
+        self.device = device
+        self.softmax = Softmax(dim=-1)
+
     def forward(
         self,
         Q: Float[Tensor, "... seq_len d_k"],
         K: Float[Tensor, "... seq_len d_k"],
         V: Float[Tensor, "... seq_len d_v"],
+        mask:Float[Tensor, "seq_len seq_len"]| None = None,
         tau: Float[Tensor, ""] | None = None,
     ) -> Float[Tensor, "... seq_len d_v"]:
         d_k = Q.shape[-1]
-        softmax = Softmax(dim=-1)
+
         if tau is not None:
             score = tau * (Q @ K.transpose(-2,-1)) / math.sqrt(d_k)
         else: 
             score = (Q @ K.transpose(-2,-1)) / math.sqrt(d_k)
-        if self.mask is None:
-            QK_compute = softmax(score)
+        if mask is None:
+            QK_compute = self.softmax(score)
         else:
-            score = score.masked_fill(self.mask==0, -1e4) #1/True = keep, 0/False = block, we can either use -torch.inf or -1e9 or -1e4 or torch.finfo(score.dtype).min
-            QK_compute = softmax(score)
+            score = score.masked_fill(mask==0, torch.finfo(score.dtype).min) #1/True = keep, 0/False = block, we can either use -torch.inf or -1e9 or -1e4 or torch.finfo(score.dtype).min
+            QK_compute = self.softmax(score)
         return QK_compute @ V
     
 def QK_Norm(Q:torch.Tensor, K:torch.Tensor, eps = 1e-5,UseNorm: bool=False):
@@ -280,10 +282,11 @@ class multihead_self_attention(nn.Module):
         self.log_tau = nn.Parameter(torch.zeros(num_heads)) if use_qk_norm is True else None
         # if we don't want a learned tau and fixed one, we can use use register_buffer
 
+        self.sdpa = scaled_dot_product_attention(device=device)
+
     def forward(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
         mask = torch.tril(torch.ones((seq_len,seq_len), dtype=torch.bool, device = x.device))
-        sdpa = scaled_dot_product_attention(mask, device=self.device)
 
         # d_k = d_model//num_heads        
         Q:Float[Tensor, "... seq_len d_model"] = self.q_proj(x)
@@ -304,7 +307,7 @@ class multihead_self_attention(nn.Module):
                 k_h:Float[Tensor, "... seq_len d_k"] = rope(k_h, token_positions)
             q_h, k_h = QK_Norm(Q = q_h, K = k_h, UseNorm = self.use_qk_norm)
             tau_h = tau[h] if tau is not None else None
-            heads.append(sdpa(q_h, k_h, v_h, tau_h))
+            heads.append(self.sdpa(q_h, k_h, v_h, tau_h, mask))
 
             
         context: Float[Tensor, "... seq_len d_model"] = torch.cat(heads, dim=-1) 
