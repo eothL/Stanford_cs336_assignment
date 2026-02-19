@@ -2,7 +2,7 @@ run_name: null
 use_memmap: true
 train_dataset: "openwebtext_train.uint16.bin"
 val_dataset: "openwebtext_val.uint16.bin"
-epochs: 10000
+epochs: 1000
 batch_size: 64 # can be changed afterward
 context_length: 512 # context len use for the leaderboard
 lr_max: 0.001
