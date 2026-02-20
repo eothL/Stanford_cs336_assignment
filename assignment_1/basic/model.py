@@ -464,17 +464,13 @@ class SGD(torch.optim.Optimizer):
                 state["t"] = t+1  # Increament iteration number
         return loss
 
-class CautiousWeightDecay:
-    @staticmethod
-    def apply_(param: Tensor, state: Tensor, lr: float, wd: float) -> None:
-        if wd == 0.0:
-            return
+def CautiousWeightDecay(param: Tensor, state: Tensor, lr:float, wd: float)-> None:
+    """Apply Cautious Weight decay technique where we use decoupled weight decay only on parameter that share the same direction as their state"""
+    mask = (state * param) > 0
+    if torch.any(mask):
+        param.mul_(1 - lr * wd * mask.to(dtype=param.dtype))
 
-        # Apply decoupled decay only where state and parameter share direction.
-        mask = (state * param) > 0
-        if torch.any(mask):
-            param.mul_(1 - lr * wd * mask.to(dtype=param.dtype))
-        
+
 class AdamW(torch.optim.Optimizer):
     def __init__(
         self,
@@ -528,7 +524,7 @@ class AdamW(torch.optim.Optimizer):
                 
                 step_size = lr * (math.sqrt(1 - beta2**t) / (1 - (beta1)**t))
                 if cautious_decay:
-                    CautiousWeightDecay.apply_(param=p.data, state=m, lr=lr, wd=wd)
+                    CautiousWeightDecay(param=p.data, state=m, lr=lr, wd=wd)
                 else:
                     p.data.mul_(1 - lr * wd)
                 p.data.addcdiv_(m, v.sqrt().add_(eps), value = -step_size)
@@ -584,9 +580,9 @@ class TransformerLM(nn.Module):
                 ):
         super().__init__()
         self.context_length = context_length
-        self.embedding = model.Embedding(num_embeddings= vocab_size, embedding_dim=d_model, device=device, dtype=torch.float32)
+        self.embedding = Embedding(num_embeddings= vocab_size, embedding_dim=d_model, device=device, dtype=torch.float32)
         self.transformer_blocks = nn.ModuleList(
-            [model.transformer_block(
+            [transformer_block(
                 d_model = d_model,
                 num_heads= num_heads,
                 d_ff = d_ff,
@@ -600,12 +596,12 @@ class TransformerLM(nn.Module):
                 use_qk_norm=use_qk_norm,
                 ) for _ in range(num_layers)])
         
-        self.lm_head = model.Linear(in_features=d_model, out_features=vocab_size, device= device, bias=bias)
+        self.lm_head = Linear(in_features=d_model, out_features=vocab_size, device= device, bias=bias)
         if tied_embedding is True:
             self.lm_head.weight =self.embedding.weight
 
         self.head = nn.Sequential(
-            model.RMSNorm(d_model=d_model, device=device),
+            RMSNorm(d_model=d_model, device=device),
             self.lm_head
         )
     
