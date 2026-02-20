@@ -12,8 +12,8 @@ seed: 93
 save_every: 10000
 save_optimizer_state: false # to reduce checkpoint 
 compile: False
-compiled_mode: "default"
-max-time: 90 #min
+compile_mode: "default"
+max_time: 90 #min
 # max-token-processed: 450 000 000
 
 # hyperparameter
@@ -45,4 +45,4 @@ use_post_norm: false
 remove_rope: false
 remove_rmsnorm: false
 use_bias: false
-use_qk_norme: false
+use_qk_norm: false
