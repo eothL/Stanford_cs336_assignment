@@ -139,6 +139,7 @@ def run_epoch(
         loader,
         loss_fcn,
         optimizer: torch.optim.Optimizer,
+        max_norm: float,
         lr: float | None = None ,
         device: torch.device | None = None,
         training = True,
@@ -165,7 +166,7 @@ def run_epoch(
                 g["lr"] = lr
 
             loss.backward()
-            model.gradient_clipping(LM.parameters(), M = 1e-2)
+            model.gradient_clipping(LM.parameters(), M = max_norm)
             optimizer.step()
 
         batch_size = logits.size(0)
@@ -187,11 +188,14 @@ def parse_args():
     parser.add_argument("--base-pattern", default=r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
     parser.add_argument("--special-tokens", default=["<|endoftext|>"])
 
+    # dataset
+    parser.add_argument("--data-path", type=str, default=None)
     parser.add_argument("--train-dataset", default="tinystories_train.uint16.bin")
     parser.add_argument("--val-dataset", default="tinystories_val.uint16.bin")
     parser.add_argument("--out-dir", default=None)
-    # default False, becomes True if present
-    parser.add_argument("--use-memmap", action= "store_true")
+
+    # training config
+    parser.add_argument("--use-memmap", action= "store_true") # default False, becomes True if present
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type = int, default = 93)
     parser.add_argument("--run-name", default = "Transformer_LM_from_scratch" )
@@ -200,9 +204,9 @@ def parse_args():
     parser.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--compile-mode", type=str, choices= ["default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"], default = "default")
     parser.add_argument("--float32-matmul-precision", type=str, default = "high")
-    # save optimizer state or not 
-    parser.add_argument("--save-optimizer-state", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--save-optimizer-state", action=argparse.BooleanOptionalAction, default=True)    # save optimizer state or not 
     parser.add_argument("--max-token-processed", type= int, default= None)
+    parser.add_argument("--max-time", type= float, default= 90.0) # min
 
     # hyperparameter
     parser.add_argument("--epochs", type= int, default = 100)
@@ -219,6 +223,7 @@ def parse_args():
     parser.add_argument("--betas", nargs= 2, type=float, default=(0.9,0.99))
     parser.add_argument("--weight-decay", type = float, default=1e-2)
     parser.add_argument("--cautious-decay", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--clip-threshold", type=float, default=1.0)
 
     ## Learning rate scheduler 
     parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
@@ -258,18 +263,12 @@ def auto_run_name(args):
           "wd": args.weight_decay,
           "beta1": args.betas[0],
           "beta2": args.betas[1],
+          "m_norm": args.clip_threshold,
           "dataset": args.train_dataset
       }
-    if args.cautious_decay is True:
-        slug = (
-            f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}"
-            f"-bs{cfg['bs']}-lr{cfg['lrmax']}-c_wd{cfg['wd']}"
-        )
-    else:
-        slug = (
-            f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}"
-            f"-bs{cfg['bs']}-lr{cfg['lrmax']}-wd{cfg['wd']}"
-        )
+    
+    slug = f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}-bs{cfg['bs']}-lr{cfg['lrmax']}-m_norm{cfg['m_norm']}"        
+    slug += f"-c_wd{cfg['wd']}" if args.cautious_decay is True else f"-wd{cfg['wd']}" 
 
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
@@ -278,6 +277,8 @@ def auto_run_name(args):
 def train():
     # argument
     args = parse_args()
+    
+    # Parameters
     args.betas = tuple(args.betas) # convert it as a tuple because args. will return a list
     device = torch.device(args.device)
     if device.type == "cuda": 
@@ -285,13 +286,16 @@ def train():
         torch.backends.cudnn.allow_tf32 = False # do it for cuDNN ops (mainly convolutions operation)
         # if args.float32_matmul_precision == "highest":
         #    torch.backends.cuda.matmul.allow_tf32 = False this one is redundant as float32==highest already do it
-            
+    
     epochs = args.epochs
     batch_size = args.batch_size
     lr_min = args.lr_min
     lr_max = args.lr_max
     warmup = args.warmup_iters
     cosine_cycle = args.cosine_cycle_iters
+    max_norm = args.clip_threshold
+    max_time = args.max_time # min
+
     if args.max_token_processed is not None:
         max_token_processed = args.max_token_processed
         limited_tokens = max_token_processed is not None  
@@ -334,7 +338,7 @@ def train():
     exp_path = os.path.join(artifacts_path, exp_folder_name) if args.out_dir is None else args.out_dir
     os.makedirs(exp_path, exist_ok= True)
 
-    run = wandb.init(
+    wandb.init(
         project = "Transformer_LM_training",
         name = run_name,
         config={
@@ -368,6 +372,7 @@ def train():
 
     # model initializing
     LM = TransformerLM(**model_cfg).to(device)
+
     optimizer = model.AdamW(
         LM.parameters(),
         lr=args.lr_max,
@@ -375,6 +380,7 @@ def train():
         weight_decay=args.weight_decay,
         cautious_decay=args.cautious_decay,
     )
+
     loss_fcn = model.cross_entropy
 
     if args.compile is True:
@@ -403,13 +409,14 @@ def train():
     best_val = float("inf")
     total_token_processed = 0
     start = time.time()
-    
-    for epoch in range(epochs):
+    accum_time = 0
+    epoch = 0
+    while epoch < epochs or accum_time < max_time :
         epoch_start = time.time()
         # forward
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
-        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, optimizer=optimizer,lr=lr, device = device, training = True)
-        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, optimizer=optimizer, device = device, training = False)
+        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizer=optimizer,lr=lr, device = device, training = True)
+        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizer=optimizer, device = device, training = False)
         total_token_processed += batch_size * context_length
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
@@ -435,7 +442,7 @@ def train():
                     include_optimizer=args.save_optimizer_state,
                 )
                 print(f" New best val {best_val: .4f}. Saved {result_path}")
-            wandb.log({ "best_val_loss": best_val })
+            wandb.log({ "best_val_loss": best_val }, step=epoch)
 
         if args.save_every and epoch % args.save_every == 0:
             result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
@@ -449,6 +456,8 @@ def train():
             )
             print(f"checkpoint saved : { checkpoint_path}")
 
+        accum_time += epoch_time
+        epoch += 1
         if limited_tokens and total_token_processed >= max_token_processed:
             break 
 
