@@ -247,6 +247,7 @@ def parse_args():
     return parser.parse_args()
 
 def auto_run_name(args):
+
     cfg = {
           "L": args.num_layers,
           "H": args.num_heads,
@@ -259,10 +260,17 @@ def auto_run_name(args):
           "beta2": args.betas[1],
           "dataset": args.train_dataset
       }
-    slug = (
-        f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}"
-        f"-bs{cfg['bs']}-lr{cfg['lrmax']}-wd{cfg['wd']}"
-    )
+    if args.cautious_decay is True:
+        slug = (
+            f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}"
+            f"-bs{cfg['bs']}-lr{cfg['lrmax']}-c_wd{cfg['wd']}"
+        )
+    else:
+        slug = (
+            f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}"
+            f"-bs{cfg['bs']}-lr{cfg['lrmax']}-wd{cfg['wd']}"
+        )
+
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
 
