@@ -464,6 +464,7 @@ class SGD(torch.optim.Optimizer):
                 state["t"] = t+1  # Increament iteration number
         return loss
 
+@torch.no_grad()
 def CautiousWeightDecay(param: Tensor, state: Tensor, lr:float, wd: float)-> None:
     """Apply Cautious Weight decay technique where we use decoupled weight decay only on parameter that share the same direction as their state"""
     mask = (state * param) > 0
