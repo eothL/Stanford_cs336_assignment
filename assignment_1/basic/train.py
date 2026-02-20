@@ -81,7 +81,6 @@ def load_checkpoint(
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
     return ckpt["iteration"]
 
-
 def run_epoch(
         LM: torch.nn.Module, 
         loader,
@@ -124,7 +123,6 @@ def run_epoch(
 
     avg_loss = total_loss / total_sample
     return avg_loss
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -289,12 +287,8 @@ def train():
     wandb.init(
         project = "Transformer_LM_training",
         name = run_name,
-        config={
-            "optimizer": "AdamW",
-            **vars(args),
-        },
-    )
-    
+        config={"optimizer": "AdamW",**vars(args)},
+    )    
     
     # hyperparameter
     model_cfg = {
@@ -338,7 +332,7 @@ def train():
 
     total_params = sum(p.numel() for p in LM.parameters())
     print(f"Model parameters: {total_params}")
-    wandb.log({"model_params": total_params})
+    wandb.summary["model_params"] = total_params 
 
     # loading data
     ## loading token from uint16.bin file
@@ -369,14 +363,13 @@ def train():
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
         epoch_time = time.time() - epoch_start
-        wandb.log(
-            { 
+
+        metrics ={ 
                 "train_loss": train_loss,
                 "val_loss": val_loss,
                 "lr": lr,
                 "epoch_time": epoch_time
             }
-        )
 
         if val_loss < best_val:
             best_val = val_loss
@@ -390,7 +383,7 @@ def train():
                     include_optimizer=args.save_optimizer_state,
                 )
                 print(f" New best val {best_val: .4f}. Saved {result_path}")
-            wandb.log({ "best_val_loss": best_val }, step=epoch)
+            metrics["best_val_loss"] = best_val
 
         if args.save_every and epoch % args.save_every == 0:
             result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
@@ -404,6 +397,7 @@ def train():
             )
             print(f"checkpoint saved : { checkpoint_path}")
 
+        wandb.log(metrics)
         accum_time += epoch_time
         epoch += 1
         if limited_tokens and total_token_processed >= max_token_processed:
@@ -412,7 +406,7 @@ def train():
     total_minute = (time.time() - start) / 60.0
 
     print(f"Training complete in { total_minute: .2f} min with the best val loss = {best_val}")
-    wandb.log({"total_training_time": total_minute})
+    wandb.summary["total_training_time"] = total_minute
     wandb.finish()
 
 if __name__=="__main__":
