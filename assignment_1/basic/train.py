@@ -81,58 +81,6 @@ def load_checkpoint(
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
     return ckpt["iteration"]
 
-class TransformerLM(nn.Module):
-    def __init__(self, 
-                vocab_size:int,
-                d_model:int,
-                num_layers:int, 
-                num_heads:int,
-                d_ff:int, 
-                context_length:int, 
-                rope_theta:float, 
-                remove_rope:bool,
-                remove_rmsnorm:bool,
-                use_post_norm:bool,
-                use_qk_norm:bool,
-                bias:bool, 
-                tied_embedding:bool=False,
-                device:torch.device | None = None,
-                ):
-        super().__init__()
-        self.context_length = context_length
-        self.embedding = model.Embedding(num_embeddings= vocab_size, embedding_dim=d_model, device=device, dtype=torch.float32)
-        self.transformer_blocks = nn.ModuleList(
-            [model.transformer_block(
-                d_model = d_model,
-                num_heads= num_heads,
-                d_ff = d_ff,
-                theta = rope_theta,
-                max_seq_len= context_length,
-                device = device,
-                bias= bias,
-                remove_rope= remove_rope,
-                remove_rmsnorm= remove_rmsnorm,
-                use_post_norm=use_post_norm,
-                use_qk_norm=use_qk_norm,
-                ) for _ in range(num_layers)])
-        
-        self.lm_head = model.Linear(in_features=d_model, out_features=vocab_size, device= device, bias=bias)
-        if tied_embedding is True:
-            self.lm_head.weight =self.embedding.weight
-
-        self.head = nn.Sequential(
-            model.RMSNorm(d_model=d_model, device=device),
-            self.lm_head
-        )
-    
-    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
-
-        h = self.embedding(x)
-        for block in self.transformer_blocks:
-            h = block(h, token_positions = token_positions)
-        logits = self.head(h)
-        return logits
-
 
 def run_epoch(
         LM: torch.nn.Module, 
@@ -371,7 +319,7 @@ def train():
         np.random.seed(args.seed)
 
     # model initializing
-    LM = TransformerLM(**model_cfg).to(device)
+    LM = model.TransformerLM(**model_cfg).to(device)
 
     optimizer = model.AdamW(
         LM.parameters(),
