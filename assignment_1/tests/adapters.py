@@ -714,3 +714,29 @@ def run_train_bpe(
     vocab, merges = train_bpe.train_bpe_heap(counts=counts,special_tokens=special_tokens,vocab_size=vocab_size,**kwargs)
     # print(merges[620:640])
     return vocab, merges
+
+def run_muon_on_quadratic(num_steps: int = 50) -> tuple[float, float]:
+    from basic.model import Muon
+    param = torch.nn.Parameter(
+        torch.tensor([[1.5, -2.0], [-0.5, 3.0]], dtype=torch.float32)
+    )
+    opt = Muon(
+        [param],
+        lr=1e-2,
+        weight_decay=0.0,
+        momentum=0.95,
+        a=3.4445,
+        b=-4.7750,
+        c=2.0315,
+        eps=1e-8,
+        cautious_decay=False,
+    )
+
+    initial_loss = (param.detach() ** 2).sum().item()
+    for _ in range(num_steps):
+        opt.zero_grad(set_to_none=True)
+        loss = (param ** 2).sum()
+        loss.backward()
+        opt.step()
+    final_loss = (param.detach() ** 2).sum().item()
+    return initial_loss, final_loss

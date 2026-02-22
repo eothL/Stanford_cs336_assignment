@@ -1,7 +1,8 @@
 import numpy
 import torch
 
-from .adapters import get_adamw_cls, run_get_lr_cosine_schedule
+from .adapters import get_adamw_cls, run_get_lr_cosine_schedule, run_muon_on_quadratic
+from basic.model import Muon
 
 
 def _optimize(opt_class) -> torch.Tensor:
@@ -93,3 +94,29 @@ def test_get_lr_cosine_schedule():
         for it in range(25)
     ]
     numpy.testing.assert_allclose(numpy.array(actual_lrs), numpy.array(expected_lrs))
+
+
+def test_muon_reduces_quadratic_loss():
+    initial_loss, final_loss = run_muon_on_quadratic()
+    assert final_loss < initial_loss
+
+
+def test_muon_step_with_no_grad_is_noop():
+    param = torch.nn.Parameter(torch.tensor([[1.0, -2.0]], dtype=torch.float32))
+    before = param.detach().clone()
+    opt = Muon(
+        [param],
+        lr=1e-2,
+        weight_decay=0.0,
+        momentum=0.95,
+        a=3.4445,
+        b=-4.7750,
+        c=2.0315,
+        eps=1e-8,
+        cautious_decay=False,
+    )
+
+    param.grad = None
+    opt.step()
+
+    torch.testing.assert_close(param.detach(), before)

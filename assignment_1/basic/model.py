@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch import Tensor
 from jaxtyping import Float, Int, Bool
 from collections.abc import Callable, Iterable
-from typing import Optional 
+from typing import Optional, Any
 
 DEFAULT_INIT_STD = 0.02
 
@@ -579,14 +579,12 @@ class AdamW(torch.optim.Optimizer):
                 else:
                     p.data.mul_(1 - lr * wd)
                 p.data.addcdiv_(m, v.sqrt().add_(eps), value = -step_size)
-                state["m"] = m
-                state["v"] = v
-                state["step"] = t
+
         return loss
     
 
 class Muon(torch.optim.Optimizer):
-    def __init__(self, params:torch.Tensor, lr:float, weight_decay:float, momentum:torch.Tensor, a:float, b:float, c:float, eps:float, cautious_decay:bool=False):
+    def __init__(self, params:Iterable[torch.nn.Parameter] | Iterable[dict[str, Any]], lr:float, weight_decay:float, momentum:float, a:float, b:float, c:float, eps:float, cautious_decay:bool=False):
 
         defaults = {
             "lr": lr,
@@ -600,9 +598,49 @@ class Muon(torch.optim.Optimizer):
         } 
         super().__init__(params, defaults)
 
-    def forward(self):
+    @torch.no_grad()
+    def step(self, closure: Optional[Callable] = None):
+        loss = None 
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
 
-        return
+        for group in self.param_groups:
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            cautious_decay = group["cautious_decay"]
+            eps = group["eps"]
+            momentum = group["momentum"]
+            a = group["a"]
+            b = group["b"]
+            c = group["c"]
+
+            for p in group["params"]:
+                if p.ndim != 2:
+                    continue
+                grad = p.grad
+                if grad is None:
+                    continue
+
+                state = self.state[p]
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["momentum_matrix"] = torch.zeros_like(p.data)
+                
+                state["step"] +=1
+                M = state["momentum_matrix"]
+                M.mul_(momentum).add_(grad)
+                M.copy_(rms_normalize(M,eps=eps))
+                MMt = M @ M.transpose(-2,-1)
+                O = a*M + b * MMt @ M + c * (MMt @ MMt) @ M 
+                gamma_adj = 0.2 * lr * math.sqrt(max(1,p.data.shape[0]/p.data.shape[1]))
+                if cautious_decay:
+                    CautiousWeightDecay(param=p.data, state= M, lr=gamma_adj, wd=wd)
+                else:
+                    p.data.mul_(1 - gamma_adj * wd)
+                p.data.add_(-gamma_adj * O)                
+
+        return loss
     
 
 def learning_rate_schedule(t: int, lr_min: int, lr_max: int, Tw: int, Tc: int):
