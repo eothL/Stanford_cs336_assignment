@@ -11,6 +11,7 @@ DEFAULT_INIT_STD = 0.02
 def _init_trunc_normal(tensor: Tensor, std: float = DEFAULT_INIT_STD) -> None:
     nn.init.trunc_normal_(tensor, mean=0.0, std=std, a=-2 * std, b=2 * std)
 
+
 class Linear(nn.Module):
     """ 
     in_feature: final dimension of the input
@@ -77,6 +78,7 @@ class Embedding(nn.Module):
     
     def forward(self, token_ids: Int[Tensor, "..."]) -> torch.Tensor:
         return self.weight[token_ids]
+
 
 def rms_normalize(input:torch.Tensor, eps:float=1e-5):
     # prevent overflow when applying square to input convert input to float 32
@@ -274,11 +276,8 @@ class scaled_dot_product_attention(nn.Module):
             QK_compute = self.softmax(score)
         return QK_compute @ V
     
-def QK_Norm(Q:torch.Tensor, K:torch.Tensor, eps = 1e-5,UseNorm: bool=False):
-    if UseNorm is False:
-        return (Q,K)
-    else:
-        return (rms_normalize(Q,eps), rms_normalize(K,eps))
+def QK_Norm(Q:torch.Tensor, K:torch.Tensor, eps = 1e-5):
+    return (rms_normalize(Q,eps), rms_normalize(K,eps))
     
 class multihead_self_attention(nn.Module):
     def __init__(self, d_model: int,  num_heads:int, max_seq_len: int,bias:bool = False, device: torch.device | None = None, use_qk_norm: bool= False):
@@ -296,8 +295,12 @@ class multihead_self_attention(nn.Module):
         # if we don't want a learned tau and fixed one, we can use use register_buffer
 
         self.sdpa = scaled_dot_product_attention(max_seq_len=max_seq_len, device=device)
-
+        self._forward_impl = self._forward_qk_norm if use_qk_norm is True else self._forward_vanilla
+    
     def forward(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
+        return self._forward_impl(x=x, token_positions=token_positions, rope=rope)
+    
+    def _forward_qk_norm(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
 
         # d_k = d_model//num_heads        
@@ -311,18 +314,37 @@ class multihead_self_attention(nn.Module):
         K_head: Float[Tensor, "... num_heads seq_len d_k"] = K.reshape(head_shape).transpose(-2,-3)
         V_head: Float[Tensor, "... num_heads seq_len d_k"] = V.reshape(head_shape).transpose(-2,-3)
 
-        if self.use_qk_norm:
-            lead_dim = Q_head.ndim - 3
-            tau = torch.exp(self.log_tau).view((*([1] * lead_dim), self.num_heads, 1, 1)) 
-        else:
-            tau = None
+        lead_dim = Q_head.ndim - 3
+        tau = torch.exp(self.log_tau).view((*([1] * lead_dim), self.num_heads, 1, 1)) 
 
         if rope is not None and token_positions is not None:
             Q_head:Float[Tensor, "... num_heads seq_len d_k"]= rope(Q_head, token_positions) 
             K_head:Float[Tensor, "... num_heads seq_len d_k"] = rope(K_head, token_positions)
-        Q_head, K_head = QK_Norm(Q = Q_head, K = K_head, UseNorm = self.use_qk_norm)
+        Q_head, K_head = QK_Norm(Q = Q_head, K = K_head)
 
         heads: Float[Tensor, "... num_heads seq_len d_k"] = self.sdpa(Q_head, K_head, V_head, seq_len=seq_len, tau=tau)
+        context: Float[Tensor, "... seq_len d_model"] = heads.movedim(-3,-2).reshape(*x.shape[:-1], self.num_heads * self.d_k)
+        return self.o_proj(context)    
+    
+    def _forward_vanilla(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
+        seq_len = x.shape[-2]
+
+        # d_k = d_model//num_heads        
+        Q:Float[Tensor, "... seq_len d_model"] = self.q_proj(x)
+        K:Float[Tensor, "... seq_len d_model"] = self.k_proj(x)
+        V:Float[Tensor, "... seq_len d_model"] = self.v_proj(x)
+
+        head_shape = torch.Size((*Q.shape[:-1], self.num_heads, self.d_k)) # ... seq_len H d_k
+        # reshaping to split into N head and swap seq_len and num_heads
+        Q_head: Float[Tensor, "... num_heads seq_len d_k"] = Q.reshape(head_shape).transpose(-2,-3)
+        K_head: Float[Tensor, "... num_heads seq_len d_k"] = K.reshape(head_shape).transpose(-2,-3)
+        V_head: Float[Tensor, "... num_heads seq_len d_k"] = V.reshape(head_shape).transpose(-2,-3)
+
+        if rope is not None and token_positions is not None:
+            Q_head:Float[Tensor, "... num_heads seq_len d_k"]= rope(Q_head, token_positions) 
+            K_head:Float[Tensor, "... num_heads seq_len d_k"] = rope(K_head, token_positions)
+
+        heads: Float[Tensor, "... num_heads seq_len d_k"] = self.sdpa(Q_head, K_head, V_head, seq_len=seq_len)
         context: Float[Tensor, "... seq_len d_model"] = heads.movedim(-3,-2).reshape(*x.shape[:-1], self.num_heads * self.d_k)
         return self.o_proj(context)    
 
