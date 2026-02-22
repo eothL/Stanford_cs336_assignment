@@ -47,12 +47,18 @@ def save_checkpoint(
     out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
     include_optimizer: bool = True,
 ):
+    
     checkpoint = {
         "model_state_dict": model.state_dict(),
         "iteration": iteration,
     }
     if include_optimizer and optimizer is not None:
-        checkpoint["optimizer_state_dict"] = optimizer.state_dict()
+        if isinstance(optimizer, dict):
+            checkpoint["optimizer_state_dict"] = {
+                name: opt.state_dict() for name, opt in optimizer.items()
+                }
+        else:
+            checkpoint["optimizer_state_dict"] = optimizer.state_dict()
 
     # Add .tmp to partially written checkpoint and replace it if the file is fully saved
     if isinstance(out, (str, os.PathLike)): # replace works only for these types
@@ -78,14 +84,19 @@ def load_checkpoint(
             "optimizer_state_dict missing in checkpoint. "
             "This checkpoint was likely saved with --save-optimizer-state = False."
         )
-    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    elif isinstance(optimizer, dict):
+        for name, opt in optimizer.items():
+            opt.load_state_dict(ckpt["optimizer_state_dict"][name])
+    else:
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+
     return ckpt["iteration"]
 
 def run_epoch(
         LM: torch.nn.Module, 
         loader,
         loss_fcn,
-        optimizer: torch.optim.Optimizer,
+        optimizers: torch.optim.Optimizer | None,
         max_norm: float,
         lr: float | None = None ,
         device: torch.device | None = None,
@@ -107,14 +118,17 @@ def run_epoch(
         loss = loss_fcn(predicted_logits= logits.view(-1, logits.size(-1)), targets= y.view(-1))
 
         if training:
-            optimizer.zero_grad(set_to_none=True) # cleaning grads from previous step
-            # updating learning rate 
-            for g in optimizer.param_groups:
-                g["lr"] = lr
+            for opt in optimizers:
+                opt.zero_grad(set_to_none=True) # cleaning grads from previous step
+                # updating learning rate 
+                for g in opt.param_groups:
+                    g["lr"] = lr
 
             loss.backward()
             model.gradient_clipping(LM.parameters(), M = max_norm)
-            optimizer.step()
+            
+            for opt in optimizers:
+                opt.step()
 
         batch_size = logits.size(0)
         # if we use loss instead of loss.detach().item(), we will accumulate the tensors in the computation graph
@@ -166,10 +180,16 @@ def parse_args():
     parser.add_argument("--rope-theta", type= float, default= 10000.0)
     
     ## Optimizer
+    ### AdamW
     parser.add_argument("--betas", nargs= 2, type=float, default=(0.9,0.99))
     parser.add_argument("--weight-decay", type = float, default=1e-2)
     parser.add_argument("--cautious-decay", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--clip-threshold", type=float, default=1.0)
+    ### Muon
+    parser.add_argument("a", type=float, default=3.4445)
+    parser.add_argument("b", type=float, default=-4.7750)
+    parser.add_argument("c", type=float, default=2.0315)
+    parser.add_argument("momentum", type=float, default=0.95)
 
     ## Learning rate scheduler 
     parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
@@ -319,13 +339,39 @@ def train():
     # model initializing
     LM = model.TransformerLM(**model_cfg).to(device)
 
-    optimizer = model.AdamW(
-        LM.parameters(),
+    muons_params, adamw_params = [], []
+    for name, p in LM.named_parameters():
+        if not p.requires_grad:
+            continue
+        use_muon = (
+            p.ndim == 2
+            and "embedding" not in name
+            and "lm_head" not in name
+            and not name.startswith("head.")
+        )
+        (muons_params if use_muon else adamw_params).append(p)
+
+    opt_muon = model.Muon(
+        muons_params,
+        lr=args.lr_max,
+        weight_decay=args.weight_decay,
+        cautious_decay=args.cautious_decay,
+        a=args.a,
+        b=args.b,
+        c=args.c,
+        momentum=args.momentum
+    )
+
+    opt_adamw = model.AdamW(
+        adamw_params,
         lr=args.lr_max,
         betas=args.betas,
         weight_decay=args.weight_decay,
         cautious_decay=args.cautious_decay,
     )
+
+    optimizers = [opt_muon, opt_adamw]
+    optimizer_bundle = {"muon": opt_muon, "adamw": opt_adamw}
 
     loss_fcn = model.cross_entropy
 
@@ -361,8 +407,8 @@ def train():
         epoch_start = time.time()
         # forward
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
-        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizer=optimizer,lr=lr, device = device, training = True)
-        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizer=optimizer, device = device, training = False)
+        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizers=optimizers,lr=lr, device = device, training = True)
+        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizers=None, device = device, training = False)
         total_token_processed += batch_size * context_length
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
@@ -381,7 +427,7 @@ def train():
                 result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
                 save_checkpoint(
                     model=LM,
-                    optimizer=optimizer,
+                    optimizer=optimizer_bundle,
                     iteration=epoch,
                     out=result_path,
                     include_optimizer=args.save_optimizer_state,
@@ -394,7 +440,7 @@ def train():
             checkpoint_path = result_path
             save_checkpoint(
                 model=LM,
-                optimizer=optimizer,
+                optimizer=optimizer_bundle,
                 iteration=epoch,
                 out=result_path,
                 include_optimizer= args.save_optimizer_state,
