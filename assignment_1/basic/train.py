@@ -211,12 +211,14 @@ def auto_run_name(args):
           "beta1": args.betas[0],
           "beta2": args.betas[1],
           "m_norm": args.clip_threshold,
-          "dataset": args.train_dataset
+          "dataset": args.train_dataset,
+          "act_fcn": args.activation_fcn
       }
     
     slug = f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}-bs{cfg['bs']}-lr{cfg['lrmax']}-m_norm{cfg['m_norm']}"        
     slug += f"-c_wd{cfg['wd']}" if args.cautious_decay is True else f"-wd{cfg['wd']}" 
-
+    slug += f"-{cfg['act_fcn']}"
+    
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
 
