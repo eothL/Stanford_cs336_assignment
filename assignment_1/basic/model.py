@@ -584,7 +584,7 @@ class AdamW(torch.optim.Optimizer):
     
 
 class Muon(torch.optim.Optimizer):
-    def __init__(self, params:Iterable[torch.nn.Parameter] | Iterable[dict[str, Any]], lr:float, weight_decay:float, momentum:float, a:float, b:float, c:float, eps:float, cautious_decay:bool=False):
+    def __init__(self, params:Iterable[torch.nn.Parameter] | Iterable[dict[str, Any]], lr:float, weight_decay:float, momentum:float, a:float, b:float, c:float, eps:float=1e-8, cautious_decay:bool=False):
 
         defaults = {
             "lr": lr,
