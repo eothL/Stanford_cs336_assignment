@@ -1,32 +1,49 @@
-run_name: null
-use_memmap: true
+# data
 train_dataset: "openwebtext_train.uint16.bin"
 val_dataset: "openwebtext_val.uint16.bin"
+out_dir: null
+use_memmap: true
+
+# training config
+run_name: null
+run_number: 1
+device: "cuda"
+seed: 93
+save_every: 10000
+save_optimizer_state: false # to reduce checkpoint size
+compile: False
+compile_mode: "default"
+max_time: 90 #min
+# max-token-processed: 450 000 000
+
+# hyperparameter
 epochs: 10000
 batch_size: 64 # can be changed afterward
 context_length: 512 # context len use for the leaderboard
-lr_max: 0.001
-lr_min: 0.00001
-warmup_iters: 50
-cosine_cycle_iters: 5000
-out_dir: null
-device: "cuda"
-seed: 93
-run_number: 1
-save_every: 5000
-save_optimizer_state: false # to reduce checkpoint 
 vocab_size: 32000
 hidden_dimension: 768
+# d_ff: 3072
 num_layers: 12
 num_heads: 6
 rope_theta: 10000.0
-tied_embedding: true
-use_qk_norm: true
-compile: true
+
+# Scheduler
+lr_max: 0.01
+lr_min: 0.00001
+warmup_iters: 500
+cosine_cycle_iters: 5000
+
+# Optimizer AdamW
 betas: [0.9, 0.99]
 weight_decay: 0.01
+cautious_decay: false
+clip_threshold: 1.0
 
+# Architecture
+tied_embedding: true
 use_post_norm: false
 remove_rope: false
 remove_rmsnorm: false
 use_bias: false
+use_qk_norm: true
+activation_fcn: swiglu
