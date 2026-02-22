@@ -11,7 +11,7 @@ DEFAULT_INIT_STD = 0.02
 def _init_trunc_normal(tensor: Tensor, std: float = DEFAULT_INIT_STD) -> None:
     nn.init.trunc_normal_(tensor, mean=0.0, std=std, a=-2 * std, b=2 * std)
 
-
+# Architecture
 class Linear(nn.Module):
     """ 
     in_feature: final dimension of the input
@@ -79,7 +79,7 @@ class Embedding(nn.Module):
     def forward(self, token_ids: Int[Tensor, "..."]) -> torch.Tensor:
         return self.weight[token_ids]
 
-
+## Normalizer
 def rms_normalize(input:torch.Tensor, eps:float=1e-5):
     # prevent overflow when applying square to input convert input to float 32
     in_dtype = input.dtype 
@@ -115,7 +115,7 @@ class RMSNorm(nn.Module):
     
 
 class positionwise_feedforward(nn.Module):
-    def __init__(self, d_model: int, d_ff: int | None = None, device= None, dtype = None, bias = False):
+    def __init__(self, d_model: int, d_ff: int | None = None, activation_fcn: str = "swiglu", device= None, dtype = None, bias = False):
         super().__init__()
         self.factory_kwargs = {}
         if device is not None:
@@ -125,10 +125,38 @@ class positionwise_feedforward(nn.Module):
 
         self.d_model = d_model
         self.d_ff = d_ff if d_ff is not None else int(((8/3 * d_model)//64)*64) # keep a multiple of 64 to make a good use of the hardware
-        self.w1_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs, bias=bias)
-        self.w3_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs, bias=bias)
-        self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
+        self.activation_fcn = activation_fcn.lower()
+        if self.activation_fcn == "swiglu":
+            self.w1_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs, bias=bias)
+            self.w3_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs, bias=bias)
+            self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
+            self._forward_impl = self._forward_swiglu
+        elif self.activation_fcn == "relu":
+            self.w1_proj = Linear(self.d_model, self.d_ff, **self.factory_kwargs, bias=bias)
+            self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
+            self._forward_impl = self._forward_relu
+        elif self.activation_fcn == "sq_relu":
+            self.w1_proj = Linear(self.d_model, self.d_ff, **self.factory_kwargs, bias=bias)
+            self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
+            self._forward_impl = self._forward_sq_relu
+        else:
+            raise ValueError(f"Unknown activation function: {activation_fcn}, only the following activation function are supported:['swiglu', 'relu', 'sq_relu'] ")
+
+    def forward(self, x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
+        return self._forward_impl(x=x)
     
+    # ReLU activation function
+    def _forward_relu(self, x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
+        h:torch.Tensor = self.w1_proj(x)
+        return self.w2_proj(h.clamp_min(0))
+
+    # ReLU^2 activation function 
+    def _forward_sq_relu(self,  x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
+        h:torch.Tensor = self.w1_proj(x)
+        h = h.clamp_min(h)
+        return self.w2_proj(h.pow(2))
+    
+    #SwiGLU activation function
     @staticmethod
     def SiLU(x:Float[Tensor, "..."])-> Float[Tensor, "..."]:
         return x * torch.sigmoid(x)
@@ -142,7 +170,7 @@ class positionwise_feedforward(nn.Module):
             self.w3_proj(x)
             )
     
-    def forward(self,x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
+    def _forward_swiglu(self,x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
         return self.w2_proj(self.SwiGLU(x))
         
 
@@ -225,7 +253,7 @@ class RoPE(nn.Module):
         out[..., 1::2] = x_even * sin + x_odd * cos
         return out # (... seq_len d_k)
 
-
+# Activation function
 class Softmax(nn.Module):
     """
     Args:
@@ -241,7 +269,7 @@ class Softmax(nn.Module):
         exp_x_stable = torch.exp(x - x.amax(dim= self.d_i, keepdim=True))
         return exp_x_stable/exp_x_stable.sum(dim= self.d_i, keepdim=True)
     
-
+# Attention
 class scaled_dot_product_attention(nn.Module):
     def __init__(self, max_seq_len: int | None = None, device: torch.device | None = None, mask: Bool[Tensor, " ... queries keys"] | None = None):
         super().__init__()
@@ -348,7 +376,6 @@ class multihead_self_attention(nn.Module):
         context: Float[Tensor, "... seq_len d_model"] = heads.movedim(-3,-2).reshape(*x.shape[:-1], self.num_heads * self.d_k)
         return self.o_proj(context)    
 
-
 class transformer_block(nn.Module):
     """
     Args:
@@ -412,6 +439,7 @@ class transformer_block(nn.Module):
                 remove_rmsnorm : bool = False,
                 use_post_norm : bool = False,
                 use_qk_norm: bool = False,
+                activation_fcn:str = "swiglu",
                 ):
         super().__init__()
         self.device = device
@@ -425,7 +453,7 @@ class transformer_block(nn.Module):
         self.rmsnorm2 = Norm()
 
         self.MHA_layer = multihead_self_attention(d_model, num_heads, max_seq_len, bias = bias, device = device, use_qk_norm=use_qk_norm)
-        self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, bias = bias, device = device)
+        self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, activation_fcn=activation_fcn,bias = bias, device = device)
 
         self._forward_impl = self._forward_post if use_post_norm else self._forward_pre 
 
@@ -447,6 +475,7 @@ class transformer_block(nn.Module):
         return self.rmsnorm2(h_norm + self.FFN(h_norm))
     
 
+# Loss function
 def cross_entropy(predicted_logits: Float[Tensor, "batch_size vocab_size"], targets: Int[Tensor, "batch_size"]) -> Float[Tensor, ""]:
     """
     Substract the largest element for numerical stability
@@ -461,9 +490,8 @@ def cross_entropy(predicted_logits: Float[Tensor, "batch_size vocab_size"], targ
 
     return loss.mean()
 
-def perplexity(losses, m):
-    return torch.exp(sum(losses)/m)
- 
+
+# Optimizer
 class SGD(torch.optim.Optimizer):
     def __init__(self, params, lr = 1e-3):
         assert lr > 0
@@ -583,7 +611,7 @@ def gradient_clipping(params: Iterable[torch.nn.Parameter], M: float, eps: float
 
     return None
 
-
+# Model 
 class TransformerLM(nn.Module):
     def __init__(self, 
                 vocab_size:int,
@@ -598,6 +626,7 @@ class TransformerLM(nn.Module):
                 use_post_norm:bool,
                 use_qk_norm:bool,
                 bias:bool, 
+                activation_fcn:str = "swiglu",
                 tied_embedding:bool=False,
                 device:torch.device | None = None,
                 ):
@@ -617,6 +646,7 @@ class TransformerLM(nn.Module):
                 remove_rmsnorm= remove_rmsnorm,
                 use_post_norm=use_post_norm,
                 use_qk_norm=use_qk_norm,
+                activation_fcn=activation_fcn,
                 ) for _ in range(num_layers)])
         
         self.lm_head = Linear(in_features=d_model, out_features=vocab_size, device= device, bias=bias)
@@ -635,3 +665,8 @@ class TransformerLM(nn.Module):
             h = block(h, token_positions = token_positions)
         logits = self.head(h)
         return logits
+
+
+# Metrics evaluation
+def perplexity(losses, m):
+    return torch.exp(sum(losses)/m)
