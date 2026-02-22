@@ -10,7 +10,7 @@ run_number: 1
 device: "cuda"
 seed: 93
 save_every: 10000
-save_optimizer_state: false # to reduce checkpoint 
+save_optimizer_state: false # to reduce checkpoint size
 compile: False
 compile_mode: "default"
 max_time: 90 #min
