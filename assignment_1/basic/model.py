@@ -585,6 +585,26 @@ class AdamW(torch.optim.Optimizer):
         return loss
     
 
+class Muon(torch.optim.Optimizer):
+    def __init__(self, params:torch.Tensor, lr:float, weight_decay:float, momentum:torch.Tensor, a:float, b:float, c:float, eps:float, cautious_decay:bool=False):
+
+        defaults = {
+            "lr": lr,
+            "eps": eps,
+            "weight_decay": weight_decay,
+            "cautious_decay": cautious_decay,
+            "momentum":momentum,
+            "a":a,
+            "b":b,
+            "c":c,
+        } 
+        super().__init__(params, defaults)
+
+    def forward(self):
+
+        return
+    
+
 def learning_rate_schedule(t: int, lr_min: int, lr_max: int, Tw: int, Tc: int):
     assert Tc > Tw
     if t < Tw:
