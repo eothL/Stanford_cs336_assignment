@@ -46,3 +46,4 @@ remove_rope: false
 remove_rmsnorm: false
 use_bias: false
 use_qk_norm: false
+activation_fcn: swiglu

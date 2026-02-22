@@ -186,6 +186,7 @@ def parse_args():
     parser.add_argument("--remove-rmsnorm", action="store_true")
     parser.add_argument("--use-bias", action="store_true")
     parser.add_argument("--use-qk-norm", action="store_true")
+    parser.add_argument("--activation-fcn", type=str, default="swiglu", help="Choose your activation function used in FFN in lowercase")
 
     parser.add_argument("--config", type= str, default= None)
     # read yaml config 
@@ -305,7 +306,8 @@ def train():
         "remove_rope" : args.remove_rope,
         "remove_rmsnorm" : args.remove_rmsnorm,
         "use_post_norm" : args.use_post_norm,
-        "use_qk_norm" : args.use_qk_norm
+        "use_qk_norm" : args.use_qk_norm,
+        "activation_fcn": args.activation_fcn
         }
 
     if args.seed:

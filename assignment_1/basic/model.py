@@ -153,7 +153,7 @@ class positionwise_feedforward(nn.Module):
     # ReLU^2 activation function 
     def _forward_sq_relu(self,  x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
         h:torch.Tensor = self.w1_proj(x)
-        h = h.clamp_min(h)
+        h = h.clamp_min(0)
         return self.w2_proj(h.pow(2))
     
     #SwiGLU activation function
