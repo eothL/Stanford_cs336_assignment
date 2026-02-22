@@ -218,7 +218,7 @@ def auto_run_name(args):
     slug = f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}-bs{cfg['bs']}-lr{cfg['lrmax']}-m_norm{cfg['m_norm']}"        
     slug += f"-c_wd{cfg['wd']}" if args.cautious_decay is True else f"-wd{cfg['wd']}" 
     slug += f"-{cfg['act_fcn']}"
-    
+
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
 
@@ -389,7 +389,7 @@ def train():
                 print(f" New best val {best_val: .4f}. Saved {result_path}")
             metrics["best_val_loss"] = best_val
 
-        if args.save_every and epoch % args.save_every == 0:
+        if args.save_every and epoch % args.save_every == 0 and epoch != 0:
             result_path = os.path.join(exp_path, f"result_{run_name}_{run_number}_{epoch}.pth")
             checkpoint_path = result_path
             save_checkpoint(
