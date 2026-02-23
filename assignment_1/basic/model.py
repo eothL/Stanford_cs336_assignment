@@ -598,6 +598,22 @@ class Muon(torch.optim.Optimizer):
         } 
         super().__init__(params, defaults)
 
+    @staticmethod
+    def _ns_polynomial(mat: Tensor, a: float, b: float, c: float) -> Tensor:
+        """
+        Shape-aware Newton-Schulz polynomial.
+        For tall matrices (rows > cols), use right-side Gram (cols x cols).
+        """
+        rows, cols = mat.shape
+        if rows > cols:
+            gram = mat.transpose(-2, -1) @ mat      # (cols, cols)
+            gram2 = gram @ gram
+            return a * mat + b * (mat @ gram) + c * (mat @ gram2)
+
+        gram = mat @ mat.transpose(-2, -1)          # (rows, rows)
+        gram2 = gram @ gram
+        return a * mat + b * (gram @ mat) + c * (gram2 @ mat)
+    
     @torch.no_grad()
     def step(self, closure: Optional[Callable] = None):
         loss = None 
@@ -631,8 +647,7 @@ class Muon(torch.optim.Optimizer):
                 M = state["momentum_matrix"]
                 M.mul_(momentum).add_(grad)
                 M.copy_(rms_normalize(M,eps=eps))
-                MMt = M @ M.transpose(-2,-1)
-                O = a*M + b * MMt @ M + c * (MMt @ MMt) @ M 
+                O = self._ns_polynomial(M, a=a, b=b, c=c)
                 gamma_adj = 0.2 * lr * math.sqrt(max(1,p.data.shape[0]/p.data.shape[1]))
                 if cautious_decay:
                     CautiousWeightDecay(param=p.data, state= M, lr=gamma_adj, wd=wd)
