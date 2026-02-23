@@ -96,9 +96,10 @@ def run_epoch(
         LM: torch.nn.Module, 
         loader,
         loss_fcn,
-        optimizers: torch.optim.Optimizer | None,
+        optimizers: dict[str, torch.optim.Optimizer] | None,
         max_norm: float,
         lr: float | None = None ,
+        lr_scales: dict[str, float] | None = None,
         device: torch.device | None = None,
         training = True,
 ):
@@ -118,16 +119,22 @@ def run_epoch(
         loss = loss_fcn(predicted_logits= logits.view(-1, logits.size(-1)), targets= y.view(-1))
 
         if training:
-            for opt in optimizers:
+            if optimizers is None:
+                raise ValueError("optimizers must be provided when training=True")
+            lr_scales = lr_scales or {}
+
+            for name, opt in optimizers.items():
                 opt.zero_grad(set_to_none=True) # cleaning grads from previous step
                 # updating learning rate 
+                scaled_lr = lr if lr is not None else opt.param_groups[0]["lr"]
+                scaled_lr *= lr_scales.get(name, 1.0)
                 for g in opt.param_groups:
-                    g["lr"] = lr
+                    g["lr"] = scaled_lr
 
             loss.backward()
             model.gradient_clipping(LM.parameters(), M = max_norm)
             
-            for opt in optimizers:
+            for opt in optimizers.values():
                 opt.step()
 
         batch_size = logits.size(0)
@@ -190,6 +197,8 @@ def parse_args():
     parser.add_argument("--b", type=float, default=-4.7750)
     parser.add_argument("--c", type=float, default=2.0315)
     parser.add_argument("--momentum", type=float, default=0.95)
+    parser.add_argument("--muon-lr-scale", type=float, default=1.0)
+    parser.add_argument("--adamw-lr-scale", type=float, default=0.1)
 
     ## Learning rate scheduler 
     parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
@@ -232,12 +241,18 @@ def auto_run_name(args):
           "beta2": args.betas[1],
           "m_norm": args.clip_threshold,
           "dataset": args.train_dataset,
-          "act_fcn": args.activation_fcn
+          "act_fcn": args.activation_fcn,
+          "muon_lr_scale": args.muon_lr_scale,
+          "adamw_lr_scale": args.adamw_lr_scale,
       }
     
     slug = f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}-bs{cfg['bs']}-lr{cfg['lrmax']}-m_norm{cfg['m_norm']}"        
     slug += f"-c_wd{cfg['wd']}" if args.cautious_decay is True else f"-wd{cfg['wd']}" 
     slug += f"-{cfg['act_fcn']}"
+    if args.muon_lr_scale != 1.0:
+        slug += f"-muonlrx{args.muon_lr_scale:g}"
+    if args.adamw_lr_scale != 1.0:
+        slug += f"-adamwlrx{args.adamw_lr_scale:g}"
 
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
@@ -311,7 +326,7 @@ def train():
     wandb.init(
         project = "Transformer_LM_training",
         name = run_name,
-        config={"optimizer": "AdamW",**vars(args)},
+        config={"optimizer": "Muon+AdamW", **vars(args)},
     )    
     
     # hyperparameter
@@ -371,8 +386,8 @@ def train():
         cautious_decay=args.cautious_decay,
     )
 
-    optimizers = [opt_muon, opt_adamw]
     optimizer_bundle = {"muon": opt_muon, "adamw": opt_adamw}
+    lr_scales = {"muon": args.muon_lr_scale, "adamw": args.adamw_lr_scale}
 
     loss_fcn = model.cross_entropy
 
@@ -408,7 +423,17 @@ def train():
         epoch_start = time.time()
         # forward
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
-        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizers=optimizers,lr=lr, device = device, training = True)
+        train_loss = run_epoch(
+            LM=LM_compil,
+            loader=train_loader,
+            loss_fcn=loss_fcn,
+            max_norm=max_norm,
+            optimizers=optimizer_bundle,
+            lr=lr,
+            lr_scales=lr_scales,
+            device=device,
+            training=True,
+        )
         val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizers=None, device = device, training = False)
         total_token_processed += batch_size * context_length
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
@@ -419,6 +444,8 @@ def train():
                 "train_loss": train_loss,
                 "val_loss": val_loss,
                 "lr": lr,
+                "lr_muon": lr * lr_scales["muon"],
+                "lr_adamw": lr * lr_scales["adamw"],
                 "epoch_time": epoch_time
             }
 
