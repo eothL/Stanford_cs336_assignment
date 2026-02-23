@@ -186,10 +186,10 @@ def parse_args():
     parser.add_argument("--cautious-decay", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--clip-threshold", type=float, default=1.0)
     ### Muon
-    parser.add_argument("a", type=float, default=3.4445)
-    parser.add_argument("b", type=float, default=-4.7750)
-    parser.add_argument("c", type=float, default=2.0315)
-    parser.add_argument("momentum", type=float, default=0.95)
+    parser.add_argument("--a", type=float, default=3.4445)
+    parser.add_argument("--b", type=float, default=-4.7750)
+    parser.add_argument("--c", type=float, default=2.0315)
+    parser.add_argument("--momentum", type=float, default=0.95)
 
     ## Learning rate scheduler 
     parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
