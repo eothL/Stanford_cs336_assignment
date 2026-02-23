@@ -11,7 +11,7 @@ device: "cuda"
 seed: 93
 save_every: 10000
 save_optimizer_state: false # to reduce checkpoint size
-compile: False
+compile: true
 compile_mode: "default"
 max_time: 90 #min
 # max-token-processed: 450 000 000
