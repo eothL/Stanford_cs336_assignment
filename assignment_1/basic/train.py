@@ -96,10 +96,11 @@ def run_epoch(
         LM: model.TransformerLM, 
         loader,
         loss_fcn,
-        optimizers: torch.optim.Optimizer | None,
+        optimizers: dict[str, torch.optim.Optimizer] | None,
         max_norm: float,
         epoch:int,
         lr: float | None = None ,
+        lr_scales: dict[str, float] | None = None,
         device: torch.device | None = None,
         training = True,
 ):
@@ -119,16 +120,20 @@ def run_epoch(
         loss = loss_fcn(predicted_logits= logits.view(-1, logits.size(-1)), targets= y.view(-1))
 
         if training:
-            for opt in optimizers:
+            lr_scales = lr_scales or {}
+
+            for opt_name, opt in optimizers.items():
                 opt.zero_grad(set_to_none=True) # cleaning grads from previous step
                 # updating learning rate 
+                scaled_lr = lr if lr is not None else opt.param_groups[0]["lr"]
+                scaled_lr *= lr_scales.get(opt_name, 1.0)
                 for g in opt.param_groups:
-                    g["lr"] = lr
+                    g["lr"] = scaled_lr
 
             loss.backward()
             model.gradient_clipping(LM.parameters(), M = max_norm)
             
-            for opt in optimizers:
+            for opt in optimizers.values():
                 opt.step()
 
         batch_size = logits.size(0)
@@ -191,6 +196,8 @@ def parse_args():
     parser.add_argument("--muon-b", type=float, default=-4.7750)
     parser.add_argument("--muon-c", type=float, default=2.0315)
     parser.add_argument("--muon-momentum", type=float, default=0.95)
+    parser.add_argument("--muon-lr-scale", type=float, default=1.0)
+    parser.add_argument("--adamw-lr-scale", type=float, default=0.1)
 
     ## Learning rate scheduler 
     parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
@@ -208,6 +215,7 @@ def parse_args():
     parser.add_argument("--use-bias", action="store_true")
     parser.add_argument("--use-qk-norm", action="store_true")
     parser.add_argument("--activation-fcn", type=str, default="swiglu", help="Choose your activation function used in FFN in lowercase")
+    parser.add_argument("--ramp-s", type=float, default=1.0, help="Scale used by ramp_relu squared branch")
 
     parser.add_argument("--config", type= str, default= None)
     # read yaml config 
@@ -233,12 +241,17 @@ def auto_run_name(args):
           "beta2": args.betas[1],
           "m_norm": args.clip_threshold,
           "dataset": args.train_dataset,
-          "act_fcn": args.activation_fcn
+          "act_fcn": args.activation_fcn,
+          "muon_lr_scale": args.muon_lr_scale,
+          "adamw_lr_scale": args.adamw_lr_scale,
       }
     
     slug = f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}-bs{cfg['bs']}-lr{cfg['lrmax']}-m_norm{cfg['m_norm']}"        
     slug += f"-c_wd{cfg['wd']}" if args.cautious_decay is True else f"-wd{cfg['wd']}" 
     slug += f"-{cfg['act_fcn']}"
+
+    slug += f"-muonlrx{args.muon_lr_scale:g}"
+    slug += f"-adamwlrx{args.adamw_lr_scale:g}"
 
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
@@ -265,6 +278,7 @@ def train():
     cosine_cycle = args.cosine_cycle_iters
     max_norm = args.clip_threshold
     max_time = args.max_time # min
+    max_time_seconds = float("inf") if max_time <= 0 else 60.0 * max_time # no time limit if negative
 
     if args.max_token_processed is not None:
         max_token_processed = args.max_token_processed
@@ -311,7 +325,7 @@ def train():
     wandb.init(
         project = "Transformer_LM_training",
         name = run_name,
-        config={"optimizer": "AdamW",**vars(args)},
+        config={"optimizer": "Muon+AdamW", **vars(args)},
     )    
     
     # hyperparameter
@@ -328,6 +342,7 @@ def train():
         "bias" : args.use_bias,
         "warmup_step": args.warmup_iters,
         "cosine_step": args.cosine_cycle_iters,
+        "ramp_s": args.ramp_s,
         "remove_rope" : args.remove_rope,
         "remove_rmsnorm" : args.remove_rmsnorm,
         "use_post_norm" : args.use_post_norm,
@@ -373,8 +388,8 @@ def train():
         cautious_decay=args.cautious_decay,
     )
 
-    optimizers = [opt_muon, opt_adamw]
     optimizer_bundle = {"muon": opt_muon, "adamw": opt_adamw}
+    lr_scales = {"muon": args.muon_lr_scale, "adamw": args.adamw_lr_scale}
 
     loss_fcn = model.cross_entropy
 
@@ -406,11 +421,22 @@ def train():
     start = time.time()
     accum_time = 0
     epoch = 0
-    while epoch < epochs or accum_time < max_time :
+    while epoch < epochs and accum_time < max_time_seconds:
         epoch_start = time.time()
         # forward
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
-        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn,epoch=epoch, max_norm=max_norm, optimizers=optimizers,lr=lr, device = device, training = True)
+        train_loss = run_epoch(
+            LM=LM_compil,
+            loader=train_loader,
+            loss_fcn=loss_fcn,
+            epoch=epoch,
+            max_norm=max_norm,
+            optimizers=optimizer_bundle,
+            lr=lr,
+            lr_scales=lr_scales,
+            device=device,
+            training=True,
+        )
         val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, epoch=epoch,max_norm=max_norm, optimizers=None, device = device, training = False)
         total_token_processed += batch_size * context_length
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
@@ -421,6 +447,8 @@ def train():
                 "train_loss": train_loss,
                 "val_loss": val_loss,
                 "lr": lr,
+                "lr_muon": lr * lr_scales["muon"],
+                "lr_adamw": lr * lr_scales["adamw"],
                 "epoch_time": epoch_time
             }
 

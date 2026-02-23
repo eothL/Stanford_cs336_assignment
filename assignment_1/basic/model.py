@@ -115,7 +115,18 @@ class RMSNorm(nn.Module):
     
 
 class positionwise_feedforward(nn.Module):
-    def __init__(self, d_model: int, warmup_step:int=None, cosine_step:int=None, d_ff: int | None = None,activation_fcn: str = "swiglu", device= None, dtype = None, bias = False):
+    def __init__(
+        self,
+        d_model: int,
+        warmup_step: int | None = None,
+        cosine_step: int | None = None,
+        ramp_s: float = 1.0,
+        d_ff: int | None = None,
+        activation_fcn: str = "swiglu",
+        device=None,
+        dtype=None,
+        bias=False,
+    ):
         super().__init__()
         self.factory_kwargs = {}
         if device is not None:
@@ -125,6 +136,7 @@ class positionwise_feedforward(nn.Module):
 
         self.warmup_step = warmup_step
         self.cosine_step = cosine_step
+        self.ramp_s = ramp_s
         self.d_model = d_model
         self.d_ff = d_ff if d_ff is not None else int(((8/3 * d_model)//64)*64) # keep a multiple of 64 to make a good use of the hardware
         self.activation_fcn = activation_fcn.lower()
@@ -168,10 +180,10 @@ class positionwise_feedforward(nn.Module):
         u = torch.clamp(u, 0.0, 1.0)
         return 0.5 * (1.0 - torch.cos(torch.pi * u))
 
-    def _forward_ramp_relu(self, x:Float[Tensor, "... d_model"], step,s:float=0.5):
+    def _forward_ramp_relu(self, x:Float[Tensor, "... d_model"], step):
         alpha = self.cosine_ramp(step=step, start_step=self.warmup_step, ramp_steps=self.cosine_step, device= x.device, dtype=x.dtype)
         r = self.relu(self.w1_proj(x))
-        h = (1 - alpha) * r + alpha * s * (r ** 2)
+        h = (1 - alpha) * r + alpha * self.ramp_s * (r ** 2)
         return self.w2_proj(h)
     
     # ReLU activation function
@@ -461,6 +473,7 @@ class transformer_block(nn.Module):
                 d_ff:int, 
                 warmup_step:int=None,
                 cosine_step:int=None,
+                ramp_s: float = 1.0,
                 theta: float | None = None,
                 max_seq_len: int | None = None,
                 device : torch.device | None = None,
@@ -483,7 +496,16 @@ class transformer_block(nn.Module):
         self.rmsnorm2 = Norm()
 
         self.MHA_layer = multihead_self_attention(d_model, num_heads, max_seq_len, bias = bias, device = device, use_qk_norm=use_qk_norm)
-        self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, activation_fcn=activation_fcn,bias = bias, device = device, warmup_step=warmup_step, cosine_step=cosine_step)
+        self.FFN = positionwise_feedforward(
+            d_model=d_model,
+            d_ff=d_ff,
+            activation_fcn=activation_fcn,
+            bias=bias,
+            device=device,
+            warmup_step=warmup_step,
+            cosine_step=cosine_step,
+            ramp_s=ramp_s,
+        )
 
         self._forward_impl = self._forward_post if use_post_norm else self._forward_pre 
 
@@ -636,6 +658,25 @@ class Muon(torch.optim.Optimizer):
         } 
         super().__init__(params, defaults)
 
+    @staticmethod
+    def _ns_polynomial(mat: Tensor, a: float, b: float, c: float) -> Tensor:
+        """
+        Build the Muon Newton-Schulz polynomial update.
+        For tall matrices (m > n), use right-side Gram (n x n) to avoid
+        constructing a large (m x m) matrix.
+        """
+        rows, cols = mat.shape
+        if rows > cols:
+            # O(m n^2) path for tall matrices.
+            gram = mat.transpose(-2, -1) @ mat
+            gram2 = gram @ gram
+            return a * mat + b * (mat @ gram) + c * (mat @ gram2)
+
+        # Keep the original left-side form for square/wide matrices.
+        gram = mat @ mat.transpose(-2, -1)
+        gram2 = gram @ gram
+        return a * mat + b * (gram @ mat) + c * (gram2 @ mat)
+
     @torch.no_grad()
     def step(self, closure: Optional[Callable] = None):
         loss = None 
@@ -669,8 +710,7 @@ class Muon(torch.optim.Optimizer):
                 M = state["momentum_matrix"]
                 M.mul_(momentum).add_(grad)
                 M.copy_(rms_normalize(M,eps=eps))
-                MMt = M @ M.transpose(-2,-1)
-                O = a*M + b * MMt @ M + c * (MMt @ MMt) @ M 
+                O = self._ns_polynomial(M, a=a, b=b, c=c)
                 gamma_adj = 0.2 * lr * math.sqrt(max(1,p.data.shape[0]/p.data.shape[1]))
                 if cautious_decay:
                     CautiousWeightDecay(param=p.data, state= M, lr=gamma_adj, wd=wd)
@@ -724,6 +764,7 @@ class TransformerLM(nn.Module):
                 bias:bool, 
                 warmup_step:int =None,
                 cosine_step:int =None,
+                ramp_s: float = 1.0,
                 activation_fcn:str = "swiglu",
                 tied_embedding:bool=False,
                 device:torch.device | None = None,
@@ -742,6 +783,8 @@ class TransformerLM(nn.Module):
                 bias= bias,
                 warmup_step=warmup_step,
                 cosine_step=cosine_step,
+                ramp_s=ramp_s,
+
                 remove_rope= remove_rope,
                 remove_rmsnorm= remove_rmsnorm,
                 use_post_norm=use_post_norm,

@@ -38,6 +38,8 @@ betas: [0.9, 0.99]
 weight_decay: 0.01
 cautious_decay: false
 clip_threshold: 1.0
+muon_lr_scale: 1.0
+adamw_lr_scale: 0.1
 
 # Architecture
 tied_embedding: true
