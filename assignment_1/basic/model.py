@@ -115,7 +115,7 @@ class RMSNorm(nn.Module):
     
 
 class positionwise_feedforward(nn.Module):
-    def __init__(self, d_model: int, d_ff: int | None = None, activation_fcn: str = "swiglu", device= None, dtype = None, bias = False):
+    def __init__(self, d_model: int, warmup_step:int=None, cosine_step:int=None, d_ff: int | None = None,activation_fcn: str = "swiglu", device= None, dtype = None, bias = False):
         super().__init__()
         self.factory_kwargs = {}
         if device is not None:
@@ -123,6 +123,8 @@ class positionwise_feedforward(nn.Module):
         if dtype is not None:
             self.factory_kwargs["dtype"] = dtype
 
+        self.warmup_step = warmup_step
+        self.cosine_step = cosine_step
         self.d_model = d_model
         self.d_ff = d_ff if d_ff is not None else int(((8/3 * d_model)//64)*64) # keep a multiple of 64 to make a good use of the hardware
         self.activation_fcn = activation_fcn.lower()
@@ -139,22 +141,48 @@ class positionwise_feedforward(nn.Module):
             self.w1_proj = Linear(self.d_model, self.d_ff, **self.factory_kwargs, bias=bias)
             self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
             self._forward_impl = self._forward_sq_relu
+        elif self.activation_fcn == "ramp_relu":
+            assert isinstance(warmup_step, int)
+            assert isinstance(cosine_step, int)
+            self.w1_proj = Linear(self.d_model, self.d_ff, **self.factory_kwargs, bias=bias)
+            self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
+            self._forward_impl = self._forward_ramp_relu
         else:
-            raise ValueError(f"Unknown activation function: {activation_fcn}, only the following activation function are supported:['swiglu', 'relu', 'sq_relu'] ")
+            raise ValueError(f"Unknown activation function: {activation_fcn}, only the following activation function are supported:['swiglu', 'relu', 'sq_relu', 'ramp_relu'] ")
 
-    def forward(self, x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
-        return self._forward_impl(x=x)
+    def forward(self, x:Float[Tensor, "... d_model"], step:int=None)-> Float[Tensor, "... d_model"]:
+        return self._forward_impl(x=x, step=step)
+    
+    @staticmethod
+    def relu(x:torch.Tensor)-> torch.Tensor:
+        return x.clamp_min(0)
+
+    @staticmethod    
+    def cosine_ramp(step, start_step: int, ramp_steps: int, device=None, dtype=torch.float32):
+        assert isinstance(step, int)
+        if ramp_steps <= 0:
+            return torch.as_tensor(step >= start_step, device=device, dtype=dtype)
+
+        step_t = torch.as_tensor(step, device=device, dtype=dtype)
+        u = (step_t - float(start_step)) / float(ramp_steps)
+        u = torch.clamp(u, 0.0, 1.0)
+        return 0.5 * (1.0 - torch.cos(torch.pi * u))
+
+    def _forward_ramp_relu(self, x:Float[Tensor, "... d_model"], step,s:float=0.5):
+        alpha = self.cosine_ramp(step=step, start_step=self.warmup_step, ramp_steps=self.cosine_step, device= x.device, dtype=x.dtype)
+        r = self.relu(self.w1_proj(x))
+        h = (1 - alpha) * r + alpha * s * (r ** 2)
+        return self.w2_proj(h)
     
     # ReLU activation function
-    def _forward_relu(self, x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
+    def _forward_relu(self, x:Float[Tensor, "... d_model"], step=None)-> Float[Tensor, "... d_model"]:
         h:torch.Tensor = self.w1_proj(x)
-        return self.w2_proj(h.clamp_min(0))
+        return self.w2_proj(self.relu(h))
 
     # ReLU^2 activation function 
-    def _forward_sq_relu(self,  x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
+    def _forward_sq_relu(self,  x:Float[Tensor, "... d_model"], step=None)-> Float[Tensor, "... d_model"]:
         h:torch.Tensor = self.w1_proj(x)
-        h = h.clamp_min(0)
-        return self.w2_proj(h.pow(2))
+        return self.w2_proj(self.relu(h).pow(2))
     
     #SwiGLU activation function
     @staticmethod
@@ -170,7 +198,7 @@ class positionwise_feedforward(nn.Module):
             self.w3_proj(x)
             )
     
-    def _forward_swiglu(self,x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
+    def _forward_swiglu(self,x:Float[Tensor, "... d_model"], step=None)-> Float[Tensor, "... d_model"]:
         return self.w2_proj(self.SwiGLU(x))
         
 
@@ -431,6 +459,8 @@ class transformer_block(nn.Module):
                 d_model:int,
                 num_heads:int, 
                 d_ff:int, 
+                warmup_step:int=None,
+                cosine_step:int=None,
                 theta: float | None = None,
                 max_seq_len: int | None = None,
                 device : torch.device | None = None,
@@ -453,26 +483,26 @@ class transformer_block(nn.Module):
         self.rmsnorm2 = Norm()
 
         self.MHA_layer = multihead_self_attention(d_model, num_heads, max_seq_len, bias = bias, device = device, use_qk_norm=use_qk_norm)
-        self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, activation_fcn=activation_fcn,bias = bias, device = device)
+        self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, activation_fcn=activation_fcn,bias = bias, device = device, warmup_step=warmup_step, cosine_step=cosine_step)
 
         self._forward_impl = self._forward_post if use_post_norm else self._forward_pre 
 
-    def forward(self, x: Float[Tensor, "... sequence_length d_model"], token_positions = None)->Float[Tensor, "... sequence_length d_model"]:
+    def forward(self, x: Float[Tensor, "... sequence_length d_model"], token_positions = None, step=None)->Float[Tensor, "... sequence_length d_model"]:
         if token_positions is None:
             seq_len = x.shape[-2]
             token_positions = torch.arange(seq_len, device=x.device, dtype=torch.long)
 
-        return  self._forward_impl(x, token_positions)
+        return  self._forward_impl(x, token_positions, step=step)
 
-    def _forward_pre(self, x, token_positions):
+    def _forward_pre(self, x, token_positions, step=None):
         attn_out = self.MHA_layer(self.rmsnorm1(x), token_positions = token_positions, rope = self.rope)
         h = x + attn_out
-        return h + self.FFN(self.rmsnorm2(h))
+        return h + self.FFN(self.rmsnorm2(h), step=step)
 
-    def _forward_post(self, x, token_positions):
+    def _forward_post(self, x, token_positions, step=None):
         attn_out = self.MHA_layer(x, token_positions = token_positions, rope = self.rope)
         h_norm = self.rmsnorm1(x + attn_out)
-        return self.rmsnorm2(h_norm + self.FFN(h_norm))
+        return self.rmsnorm2(h_norm + self.FFN(h_norm, step=step))
     
 
 # Loss function
@@ -584,7 +614,15 @@ class AdamW(torch.optim.Optimizer):
     
 
 class Muon(torch.optim.Optimizer):
-    def __init__(self, params:Iterable[torch.nn.Parameter] | Iterable[dict[str, Any]], lr:float, weight_decay:float, momentum:float, a:float, b:float, c:float, eps:float=1e-8, cautious_decay:bool=False):
+    def __init__(self, params:Iterable[torch.nn.Parameter] | Iterable[dict[str, Any]],
+                lr:float, 
+                weight_decay:float=0.01, 
+                momentum:float=0.95, 
+                a:float=3.4445, 
+                b:float=-4.7750, 
+                c:float=2.0315, 
+                eps:float=1e-8, 
+                cautious_decay:bool=False):
 
         defaults = {
             "lr": lr,
@@ -684,6 +722,8 @@ class TransformerLM(nn.Module):
                 use_post_norm:bool,
                 use_qk_norm:bool,
                 bias:bool, 
+                warmup_step:int =None,
+                cosine_step:int =None,
                 activation_fcn:str = "swiglu",
                 tied_embedding:bool=False,
                 device:torch.device | None = None,
@@ -700,6 +740,8 @@ class TransformerLM(nn.Module):
                 max_seq_len= context_length,
                 device = device,
                 bias= bias,
+                warmup_step=warmup_step,
+                cosine_step=cosine_step,
                 remove_rope= remove_rope,
                 remove_rmsnorm= remove_rmsnorm,
                 use_post_norm=use_post_norm,
@@ -716,11 +758,11 @@ class TransformerLM(nn.Module):
             self.lm_head
         )
     
-    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None, step=None) -> torch.Tensor:
 
         h = self.embedding(x)
         for block in self.transformer_blocks:
-            h = block(h, token_positions = token_positions)
+            h = block(h, token_positions = token_positions, step=step)
         logits = self.head(h)
         return logits
 

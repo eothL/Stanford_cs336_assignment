@@ -93,11 +93,12 @@ def load_checkpoint(
     return ckpt["iteration"]
 
 def run_epoch(
-        LM: torch.nn.Module, 
+        LM: model.TransformerLM, 
         loader,
         loss_fcn,
         optimizers: torch.optim.Optimizer | None,
         max_norm: float,
+        epoch:int,
         lr: float | None = None ,
         device: torch.device | None = None,
         training = True,
@@ -113,7 +114,7 @@ def run_epoch(
     total_sample = 0
     with context:
         x, y = loader()
-        logits: Float[Tensor, "batch_size seq_len vocab_size"] = LM(x)
+        logits: Float[Tensor, "batch_size seq_len vocab_size"] = LM(x, step=epoch)
         # flatten matrices with view(-1) and reshape into vocab_size for x
         loss = loss_fcn(predicted_logits= logits.view(-1, logits.size(-1)), targets= y.view(-1))
 
@@ -186,10 +187,10 @@ def parse_args():
     parser.add_argument("--cautious-decay", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--clip-threshold", type=float, default=1.0)
     ### Muon
-    parser.add_argument("a", type=float, default=3.4445)
-    parser.add_argument("b", type=float, default=-4.7750)
-    parser.add_argument("c", type=float, default=2.0315)
-    parser.add_argument("momentum", type=float, default=0.95)
+    parser.add_argument("--muon-a", type=float, default=3.4445)
+    parser.add_argument("--muon-b", type=float, default=-4.7750)
+    parser.add_argument("--muon-c", type=float, default=2.0315)
+    parser.add_argument("--muon-momentum", type=float, default=0.95)
 
     ## Learning rate scheduler 
     parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
@@ -325,6 +326,8 @@ def train():
         "tied_embedding": args.tied_embedding,
         "device": device,
         "bias" : args.use_bias,
+        "warmup_step": args.warmup_iters,
+        "cosine_step": args.cosine_cycle_iters,
         "remove_rope" : args.remove_rope,
         "remove_rmsnorm" : args.remove_rmsnorm,
         "use_post_norm" : args.use_post_norm,
@@ -356,10 +359,10 @@ def train():
         lr=args.lr_max,
         weight_decay=args.weight_decay,
         cautious_decay=args.cautious_decay,
-        a=args.a,
-        b=args.b,
-        c=args.c,
-        momentum=args.momentum
+        a=args.muon_a,
+        b=args.muon_b,
+        c=args.muon_c,
+        momentum=args.muon_momentum
     )
 
     opt_adamw = model.AdamW(
@@ -407,8 +410,8 @@ def train():
         epoch_start = time.time()
         # forward
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
-        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizers=optimizers,lr=lr, device = device, training = True)
-        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizers=None, device = device, training = False)
+        train_loss = run_epoch(LM=LM_compil, loader=train_loader, loss_fcn=loss_fcn,epoch=epoch, max_norm=max_norm, optimizers=optimizers,lr=lr, device = device, training = True)
+        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, epoch=epoch,max_norm=max_norm, optimizers=None, device = device, training = False)
         total_token_processed += batch_size * context_length
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
