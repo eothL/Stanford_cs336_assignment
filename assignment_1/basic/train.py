@@ -187,6 +187,13 @@ def parse_args():
     parser.add_argument("--rope-theta", type= float, default= 10000.0)
     
     ## Optimizer
+    parser.add_argument(
+        "--optimizer-mode",
+        type=str,
+        choices=["adamw", "muon_adamw"],
+        default="muon_adamw",
+        help="Choose optimizer setup: all params with AdamW, or split AdamW+Muon.",
+    )
     ### AdamW
     parser.add_argument("--betas", nargs= 2, type=float, default=(0.9,0.99))
     parser.add_argument("--weight-decay", type = float, default=1e-2)
@@ -198,7 +205,7 @@ def parse_args():
     parser.add_argument("--c", type=float, default=2.0315)
     parser.add_argument("--momentum", type=float, default=0.95)
     parser.add_argument("--muon-lr-scale", type=float, default=1.0)
-    parser.add_argument("--adamw-lr-scale", type=float, default=0.1)
+    parser.add_argument("--adamw-lr-scale", type=float, default=None, help="AdamW LR multiplier. Default: 0.1 in muon_adamw mode, 1.0 in adamw mode.")
 
     ## Learning rate scheduler 
     parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
@@ -228,6 +235,9 @@ def parse_args():
     return parser.parse_args()
 
 def auto_run_name(args):
+    adamw_lr_scale = args.adamw_lr_scale
+    if adamw_lr_scale is None:
+        adamw_lr_scale = 0.1 if args.optimizer_mode == "muon_adamw" else 1.0
 
     cfg = {
           "L": args.num_layers,
@@ -242,17 +252,22 @@ def auto_run_name(args):
           "m_norm": args.clip_threshold,
           "dataset": args.train_dataset,
           "act_fcn": args.activation_fcn,
+          "optimizer_mode": args.optimizer_mode,
           "muon_lr_scale": args.muon_lr_scale,
-          "adamw_lr_scale": args.adamw_lr_scale,
+          "adamw_lr_scale": adamw_lr_scale,
       }
     
     slug = f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}-bs{cfg['bs']}-lr{cfg['lrmax']}-m_norm{cfg['m_norm']}"        
     slug += f"-c_wd{cfg['wd']}" if args.cautious_decay is True else f"-wd{cfg['wd']}" 
     slug += f"-{cfg['act_fcn']}"
-    if args.muon_lr_scale != 1.0:
-        slug += f"-muonlrx{args.muon_lr_scale:g}"
-    if args.adamw_lr_scale != 1.0:
-        slug += f"-adamwlrx{args.adamw_lr_scale:g}"
+    slug += f"-{args.optimizer_mode}"
+    if args.optimizer_mode == "muon_adamw":
+        if args.muon_lr_scale != 1.0:
+            slug += f"-muonlrx{args.muon_lr_scale:g}"
+        if adamw_lr_scale != 1.0:
+            slug += f"-adamwlrx{adamw_lr_scale:g}"
+    elif adamw_lr_scale != 1.0:
+        slug += f"-adamwlrx{adamw_lr_scale:g}"
 
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
@@ -280,6 +295,9 @@ def train():
     max_norm = args.clip_threshold
     max_time = args.max_time # min
     max_time_seconds = float("inf") if max_time <= 0 else 60*max_time # no time limits if it is negative or 0 
+    adamw_lr_scale = args.adamw_lr_scale
+    if adamw_lr_scale is None:
+        adamw_lr_scale = 0.1 if args.optimizer_mode == "muon_adamw" else 1.0
 
     if args.max_token_processed is not None:
         max_token_processed = args.max_token_processed
@@ -326,7 +344,7 @@ def train():
     wandb.init(
         project = "Transformer_LM_training",
         name = run_name,
-        config={"optimizer": "Muon+AdamW", **vars(args)},
+        config={"optimizer": args.optimizer_mode, **vars(args)},
     )    
     
     # hyperparameter
@@ -355,39 +373,51 @@ def train():
     # model initializing
     LM = model.TransformerLM(**model_cfg).to(device)
 
-    muons_params, adamw_params = [], []
-    for name, p in LM.named_parameters():
-        if not p.requires_grad:
-            continue
-        use_muon = (
-            p.ndim == 2
-            and "embedding" not in name
-            and "lm_head" not in name
-            and not name.startswith("head.")
+    optimizer_bundle: dict[str, torch.optim.Optimizer]
+    lr_scales: dict[str, float]
+    if args.optimizer_mode == "adamw":
+        all_params = [p for p in LM.parameters() if p.requires_grad]
+        opt_adamw = model.AdamW(
+            all_params,
+            lr=args.lr_max,
+            betas=args.betas,
+            weight_decay=args.weight_decay,
+            cautious_decay=args.cautious_decay,
         )
-        (muons_params if use_muon else adamw_params).append(p)
+        optimizer_bundle = {"adamw": opt_adamw}
+        lr_scales = {"adamw": adamw_lr_scale}
+    else:
+        muons_params, adamw_params = [], []
+        for name, p in LM.named_parameters():
+            if not p.requires_grad:
+                continue
+            use_muon = (
+                p.ndim == 2
+                and "embedding" not in name
+                and "lm_head" not in name
+                and not name.startswith("head.")
+            )
+            (muons_params if use_muon else adamw_params).append(p)
 
-    opt_muon = model.Muon(
-        muons_params,
-        lr=args.lr_max,
-        weight_decay=args.weight_decay,
-        cautious_decay=args.cautious_decay,
-        a=args.a,
-        b=args.b,
-        c=args.c,
-        momentum=args.momentum
-    )
-
-    opt_adamw = model.AdamW(
-        adamw_params,
-        lr=args.lr_max,
-        betas=args.betas,
-        weight_decay=args.weight_decay,
-        cautious_decay=args.cautious_decay,
-    )
-
-    optimizer_bundle = {"muon": opt_muon, "adamw": opt_adamw}
-    lr_scales = {"muon": args.muon_lr_scale, "adamw": args.adamw_lr_scale}
+        opt_muon = model.Muon(
+            muons_params,
+            lr=args.lr_max,
+            weight_decay=args.weight_decay,
+            cautious_decay=args.cautious_decay,
+            a=args.a,
+            b=args.b,
+            c=args.c,
+            momentum=args.momentum,
+        )
+        opt_adamw = model.AdamW(
+            adamw_params,
+            lr=args.lr_max,
+            betas=args.betas,
+            weight_decay=args.weight_decay,
+            cautious_decay=args.cautious_decay,
+        )
+        optimizer_bundle = {"muon": opt_muon, "adamw": opt_adamw}
+        lr_scales = {"muon": args.muon_lr_scale, "adamw": adamw_lr_scale}
 
     loss_fcn = model.cross_entropy
 
@@ -444,10 +474,10 @@ def train():
                 "train_loss": train_loss,
                 "val_loss": val_loss,
                 "lr": lr,
-                "lr_muon": lr * lr_scales["muon"],
-                "lr_adamw": lr * lr_scales["adamw"],
                 "epoch_time": epoch_time
             }
+        for opt_name, scale in lr_scales.items():
+            metrics[f"lr_{opt_name}"] = lr * scale
 
         if val_loss < best_val:
             best_val = val_loss
