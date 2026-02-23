@@ -646,8 +646,13 @@ class Muon(torch.optim.Optimizer):
                 state["step"] +=1
                 M = state["momentum_matrix"]
                 M.mul_(momentum).add_(grad)
-                M.copy_(rms_normalize(M,eps=eps))
-                O = self._ns_polynomial(M, a=a, b=b, c=c)
+                # Keep the momentum buffer as a raw EMA of gradients.
+                # Newton-Schulz normalization should be applied on a temporary tensor.
+                M_norm = torch.linalg.norm(M)
+                if torch.isnan(M_norm) or torch.isinf(M_norm):
+                    continue
+                X = M / (M_norm + eps)
+                O = self._ns_polynomial(X, a=a, b=b, c=c)
                 gamma_adj = 0.2 * lr * math.sqrt(max(1,p.data.shape[0]/p.data.shape[1]))
                 if cautious_decay:
                     CautiousWeightDecay(param=p.data, state= M, lr=gamma_adj, wd=wd)
