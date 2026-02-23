@@ -264,6 +264,7 @@ def train():
     cosine_cycle = args.cosine_cycle_iters
     max_norm = args.clip_threshold
     max_time = args.max_time # min
+    max_time_seconds = float("inf") if max_time <= 0 else 60*max_time # no time limits if it is negative or 0 
 
     if args.max_token_processed is not None:
         max_token_processed = args.max_token_processed
@@ -403,7 +404,7 @@ def train():
     start = time.time()
     accum_time = 0
     epoch = 0
-    while epoch < epochs or accum_time < max_time :
+    while epoch < epochs and accum_time < max_time_seconds :
         epoch_start = time.time()
         # forward
         lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
