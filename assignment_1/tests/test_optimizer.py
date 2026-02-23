@@ -120,3 +120,29 @@ def test_muon_step_with_no_grad_is_noop():
     opt.step()
 
     torch.testing.assert_close(param.detach(), before)
+
+
+def test_muon_momentum_buffer_tracks_raw_ema():
+    param = torch.nn.Parameter(torch.tensor([[1.0, -2.0], [0.5, 3.0]], dtype=torch.float32))
+    grad = torch.tensor([[0.3, -0.7], [0.2, 0.1]], dtype=torch.float32)
+    opt = Muon(
+        [param],
+        lr=1e-2,
+        weight_decay=0.0,
+        momentum=0.9,
+        a=3.4445,
+        b=-4.7750,
+        c=2.0315,
+        eps=1e-8,
+        cautious_decay=False,
+    )
+
+    param.grad = grad.clone()
+    opt.step()
+    state = opt.state[param]
+    torch.testing.assert_close(state["momentum_matrix"], grad)
+
+    param.grad = grad.clone()
+    opt.step()
+    expected = grad * 1.9  # 0.9 * grad + grad
+    torch.testing.assert_close(state["momentum_matrix"], expected)
