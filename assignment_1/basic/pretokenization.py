@@ -1,7 +1,8 @@
 from __future__ import annotations
 import os
 from typing import BinaryIO, Sequence
-from . import pretokenizer_baseline, pretokenizer
+
+from . import pretokenizer
 from collections import Counter
 import multiprocessing as mp
 from regex import Pattern
@@ -193,8 +194,8 @@ def main():
             f.seek(start)
             chunk = f.read(end - start).decode("utf-8", errors="ignore")
             # Run pre-tokenization on your chunk and store the counts for each pre-token
-            pattern = pretokenizer_baseline.merging_pattern(base_pattern,special_tokens)
-            pretokenised_chunck = pretokenizer_baseline.pretokenize(pattern,text=chunk)
+            pattern = pretokenizer.merging_pattern(base_pattern,special_tokens)
+            pretokenised_chunck = pretokenizer.pretokenize(pattern,text=chunk)
             pretokenize_total.update(pretokenised_chunck)
 
         total = sum(pretokenize_total.values())

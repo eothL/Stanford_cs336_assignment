@@ -553,7 +553,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    from basic.model import cross_entropy
+    from basic.losses import cross_entropy
     return cross_entropy(predicted_logits=inputs,targets=targets)
 
 
@@ -566,7 +566,7 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    from basic.model import gradient_clipping
+    from basic.optimizer import gradient_clipping
     return gradient_clipping(params=parameters, M = max_l2_norm)
 
 
@@ -574,7 +574,7 @@ def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    from basic.model import AdamW
+    from basic.optimizer import AdamW
     return AdamW 
 
 
@@ -603,7 +603,7 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    from basic.model import learning_rate_schedule
+    from basic.scheduler import learning_rate_schedule
     return learning_rate_schedule(t= it, lr_min= min_learning_rate, lr_max= max_learning_rate, Tw=warmup_iters, Tc=cosine_cycle_iters)
 
 
@@ -625,6 +625,7 @@ def run_save_checkpoint(
     """
     from basic.train import save_checkpoint
     return save_checkpoint(model, optimizer, iteration, out)
+
 
 def run_load_checkpoint(
     src: str | os.PathLike | BinaryIO | IO[bytes],
@@ -672,7 +673,6 @@ def get_tokenizer(
     return Tokenizer(vocab, merges, special_tokens)
 
 
-
 def run_train_bpe(
     input_path: str | os.PathLike,
     vocab_size: int,
@@ -715,8 +715,9 @@ def run_train_bpe(
     # print(merges[620:640])
     return vocab, merges
 
+
 def run_muon_on_quadratic(num_steps: int = 50) -> tuple[float, float]:
-    from basic.model import Muon
+    from basic.optimizer import Muon
     param = torch.nn.Parameter(
         torch.tensor([[1.5, -2.0], [-0.5, 3.0]], dtype=torch.float32)
     )

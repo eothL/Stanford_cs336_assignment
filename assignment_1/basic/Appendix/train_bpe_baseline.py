@@ -1,4 +1,4 @@
-from .pretokenization import count_pretokens_parallel
+from ..pretokenization import count_pretokens_parallel
 from collections import Counter
 import os 
 

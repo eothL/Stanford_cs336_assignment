@@ -12,7 +12,7 @@ import argparse
 import wandb
 import time
 from functools import partial
-from . import model 
+from . import model, losses, optimizer, scheduler
 
 def load_tokens(path, use_memmap:bool):
     if use_memmap:
@@ -132,7 +132,7 @@ def run_epoch(
                     g["lr"] = scaled_lr
 
             loss.backward()
-            model.gradient_clipping(LM.parameters(), M = max_norm)
+            optimizer.gradient_clipping(LM.parameters(), M = max_norm)
             
             for opt in optimizers.values():
                 opt.step()
@@ -377,7 +377,7 @@ def train():
     lr_scales: dict[str, float]
     if args.optimizer_mode == "adamw":
         all_params = [p for p in LM.parameters() if p.requires_grad]
-        opt_adamw = model.AdamW(
+        opt_adamw = optimizer.AdamW(
             all_params,
             lr=args.lr_max,
             betas=args.betas,
@@ -399,7 +399,7 @@ def train():
             )
             (muons_params if use_muon else adamw_params).append(p)
 
-        opt_muon = model.Muon(
+        opt_muon = optimizer.Muon(
             muons_params,
             lr=args.lr_max,
             weight_decay=args.weight_decay,
@@ -409,7 +409,7 @@ def train():
             c=args.c,
             momentum=args.momentum,
         )
-        opt_adamw = model.AdamW(
+        opt_adamw = optimizer.AdamW(
             adamw_params,
             lr=args.lr_max,
             betas=args.betas,
@@ -419,7 +419,7 @@ def train():
         optimizer_bundle = {"muon": opt_muon, "adamw": opt_adamw}
         lr_scales = {"muon": args.muon_lr_scale, "adamw": adamw_lr_scale}
 
-    loss_fcn = model.cross_entropy
+    loss_fcn = losses.cross_entropy
 
     if args.compile is True:
         LM_compil = torch.compile(LM, mode= args.compile_mode, dynamic= False)
@@ -452,7 +452,7 @@ def train():
     while epoch < epochs and accum_time < max_time_seconds :
         epoch_start = time.time()
         # forward
-        lr = model.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
+        lr = scheduler.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
         train_loss = run_epoch(
             LM=LM_compil,
             loader=train_loader,

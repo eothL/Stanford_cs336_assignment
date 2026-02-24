@@ -2,7 +2,7 @@ import numpy
 import torch
 
 from .adapters import get_adamw_cls, run_get_lr_cosine_schedule, run_muon_on_quadratic
-from basic.model import Muon
+from basic.optimizer import Muon
 
 
 def _optimize(opt_class) -> torch.Tensor:

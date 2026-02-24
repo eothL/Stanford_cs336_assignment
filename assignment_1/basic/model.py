@@ -3,8 +3,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from jaxtyping import Float, Int, Bool
-from collections.abc import Callable, Iterable
-from typing import Optional, Any
+
 
 DEFAULT_INIT_STD = 0.02
 
@@ -253,7 +252,7 @@ class RoPE(nn.Module):
         out[..., 1::2] = x_even * sin + x_odd * cos
         return out # (... seq_len d_k)
 
-# Activation function
+#@ Activation function
 class Softmax(nn.Module):
     """
     Args:
@@ -269,7 +268,8 @@ class Softmax(nn.Module):
         exp_x_stable = torch.exp(x - x.amax(dim= self.d_i, keepdim=True))
         return exp_x_stable/exp_x_stable.sum(dim= self.d_i, keepdim=True)
     
-# Attention
+
+## Attention
 class scaled_dot_product_attention(nn.Module):
     def __init__(self, max_seq_len: int | None = None, device: torch.device | None = None, mask: Bool[Tensor, " ... queries keys"] | None = None):
         super().__init__()
@@ -304,9 +304,11 @@ class scaled_dot_product_attention(nn.Module):
             QK_compute = self.softmax(score)
         return QK_compute @ V
     
+
 def QK_Norm(Q:torch.Tensor, K:torch.Tensor, eps = 1e-5):
     return (rms_normalize(Q,eps), rms_normalize(K,eps))
     
+
 class multihead_self_attention(nn.Module):
     def __init__(self, d_model: int,  num_heads:int, max_seq_len: int,bias:bool = False, device: torch.device | None = None, use_qk_norm: bool= False):
         super().__init__()
@@ -375,6 +377,7 @@ class multihead_self_attention(nn.Module):
         heads: Float[Tensor, "... num_heads seq_len d_k"] = self.sdpa(Q_head, K_head, V_head, seq_len=seq_len)
         context: Float[Tensor, "... seq_len d_model"] = heads.movedim(-3,-2).reshape(*x.shape[:-1], self.num_heads * self.d_k)
         return self.o_proj(context)    
+
 
 class transformer_block(nn.Module):
     """
@@ -475,220 +478,6 @@ class transformer_block(nn.Module):
         return self.rmsnorm2(h_norm + self.FFN(h_norm))
     
 
-# Loss function
-def cross_entropy(predicted_logits: Float[Tensor, "batch_size vocab_size"], targets: Int[Tensor, "batch_size"]) -> Float[Tensor, ""]:
-    """
-    Substract the largest element for numerical stability
-    cancel out log and exp whenever possible 
-    Args:
-        o_i (float): predicted logits 
-        x_i+1 (int): targets, next id token 
-    """
-    targets = targets.long()
-    targets_logits = predicted_logits.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
-    loss = torch.logsumexp(predicted_logits, dim=-1) - targets_logits
-
-    return loss.mean()
-
-
-# Optimizer
-class SGD(torch.optim.Optimizer):
-    def __init__(self, params, lr = 1e-3):
-        assert lr > 0
-        defaults = {"lr": lr}
-        super().__init__(params, defaults)
-        
-
-    def step(self, closure: Optional[Callable]= None):
-        loss = None if closure is None else closure()
-        for group in self.param_groups:
-            lr = group["lr"]
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-
-                state = self.state[p] # Get state associated with p
-                t = state.get("t", 0) # get iteration number from the state, or initial value
-                grad = p.grad.data    # get the gradient of the loss with respect to p
-                p.data -= lr/ math.sqrt(t+1) * grad # udpate weight tensor in-place
-                state["t"] = t+1  # Increament iteration number
-        return loss
-
-@torch.no_grad()
-def CautiousWeightDecay(param: Tensor, state: Tensor, lr:float, wd: float)-> None:
-    """Apply Cautious Weight decay technique where we use decoupled weight decay only on parameter that share the same direction as their state"""
-    mask = (state * param) > 0
-    if torch.any(mask):
-        param.mul_(1 - lr * wd * mask.to(dtype=param.dtype))
-
-
-class AdamW(torch.optim.Optimizer):
-    def __init__(
-        self,
-        params,
-        lr=1e-3,
-        betas=(0.9, 0.999),
-        eps=1e-8,
-        weight_decay=0.0,
-        cautious_decay: bool = False,
-    ):
-        defaults = {
-            "lr": lr,
-            "betas": betas,
-            "eps": eps,
-            "weight_decay": weight_decay,
-            "cautious_decay": cautious_decay,
-        } 
-        super().__init__(params, defaults)
-
-    @torch.no_grad()   
-    def step(self, closure: Optional[Callable]= None):
-        loss = None 
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-
-        for group in self.param_groups:
-            lr = group["lr"]
-            beta1, beta2 = group["betas"]
-            eps = group["eps"]
-            wd = group["weight_decay"]
-            cautious_decay = group["cautious_decay"]
-
-            for p in group["params"]:
-                grad = p.grad
-                if p.grad is None:
-                    continue
-
-                state = self.state[p]
-                if len(state) == 0:
-                    state["step"] = 0
-                    state["m"] = torch.zeros_like(p.data)
-                    state["v"] = torch.zeros_like(p.data)
-                
-                state["step"] += 1
-                t = state["step"]
-                m, v = state["m"], state["v"]
-
-                m.mul_(beta1).add_(grad, alpha = 1 - beta1) # equivalent to m = beta1 * m + (1 - beta1) * grad
-                v.mul_(beta2).addcmul_(grad, grad, value = 1 - beta2)# v = beta2 * v + (1 - beta2) * grad * grad
-                
-                step_size = lr * (math.sqrt(1 - beta2**t) / (1 - (beta1)**t))
-                if cautious_decay:
-                    CautiousWeightDecay(param=p.data, state=m, lr=lr, wd=wd)
-                else:
-                    p.data.mul_(1 - lr * wd)
-                p.data.addcdiv_(m, v.sqrt().add_(eps), value = -step_size)
-
-        return loss
-    
-
-class Muon(torch.optim.Optimizer):
-    def __init__(self, params:Iterable[torch.nn.Parameter] | Iterable[dict[str, Any]], lr:float, weight_decay:float, momentum:float, a:float, b:float, c:float, eps:float=1e-8, cautious_decay:bool=False):
-
-        defaults = {
-            "lr": lr,
-            "eps": eps,
-            "weight_decay": weight_decay,
-            "cautious_decay": cautious_decay,
-            "momentum":momentum,
-            "a":a,
-            "b":b,
-            "c":c,
-        } 
-        super().__init__(params, defaults)
-
-    @staticmethod
-    def _ns_polynomial(mat: Tensor, a: float, b: float, c: float) -> Tensor:
-        """
-        Shape-aware Newton-Schulz polynomial.
-        For tall matrices (rows > cols), use right-side Gram (cols x cols).
-        """
-        rows, cols = mat.shape
-        if rows > cols:
-            gram = mat.transpose(-2, -1) @ mat      # (cols, cols)
-            gram2 = gram @ gram
-            return a * mat + b * (mat @ gram) + c * (mat @ gram2)
-
-        gram = mat @ mat.transpose(-2, -1)          # (rows, rows)
-        gram2 = gram @ gram
-        return a * mat + b * (gram @ mat) + c * (gram2 @ mat)
-    
-    @torch.no_grad()
-    def step(self, closure: Optional[Callable] = None):
-        loss = None 
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-
-        for group in self.param_groups:
-            lr = group["lr"]
-            wd = group["weight_decay"]
-            cautious_decay = group["cautious_decay"]
-            eps = group["eps"]
-            momentum = group["momentum"]
-            a = group["a"]
-            b = group["b"]
-            c = group["c"]
-
-            for p in group["params"]:
-                if p.ndim != 2:
-                    continue
-                grad = p.grad
-                if grad is None:
-                    continue
-
-                state = self.state[p]
-                if len(state) == 0:
-                    state["step"] = 0
-                    state["momentum_matrix"] = torch.zeros_like(p.data)
-                
-                state["step"] +=1
-                M = state["momentum_matrix"]
-                M.mul_(momentum).add_(grad)
-                # Keep the momentum buffer as a raw EMA of gradients.
-                # Newton-Schulz normalization should be applied on a temporary tensor.
-                M_norm = torch.linalg.norm(M)
-                if torch.isnan(M_norm) or torch.isinf(M_norm):
-                    continue
-                X = M / (M_norm + eps)
-                O = self._ns_polynomial(X, a=a, b=b, c=c)
-                gamma_adj = 0.2 * lr * math.sqrt(max(1,p.data.shape[0]/p.data.shape[1]))
-                if cautious_decay:
-                    CautiousWeightDecay(param=p.data, state= M, lr=gamma_adj, wd=wd)
-                else:
-                    p.data.mul_(1 - gamma_adj * wd)
-                p.data.add_(-gamma_adj * O)                
-
-        return loss
-    
-
-def learning_rate_schedule(t: int, lr_min: int, lr_max: int, Tw: int, Tc: int):
-    assert Tc > Tw
-    if t < Tw:
-        return t/Tw*lr_max
-    if t > Tc:
-
-        return lr_min
-    else:
-        return lr_min+ (1/2) * (1 + math.cos((t-Tw) * math.pi/(Tc-Tw))) * (lr_max - lr_min)
-    
-
-def gradient_clipping(params: Iterable[torch.nn.Parameter], M: float, eps: float = 1e-6,):
-    # l2_norm = torch.norm(params)
-    grads = [p.grad for p in params if p.grad is not None]
-    if not grads:
-        return None
-    total_sq = sum(torch.sum(g*g) for g in grads)
-    total_norm = torch.sqrt(total_sq)
-    clip_coef = M/(total_norm + eps)
-    
-    if clip_coef < 1:
-        for g in grads:
-            g.mul_(clip_coef)
-
-    return None
-
 # Model 
 class TransformerLM(nn.Module):
     def __init__(self, 
@@ -743,8 +532,3 @@ class TransformerLM(nn.Module):
             h = block(h, token_positions = token_positions)
         logits = self.head(h)
         return logits
-
-
-# Metrics evaluation
-def perplexity(losses, m):
-    return torch.exp(sum(losses)/m)
