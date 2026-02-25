@@ -221,8 +221,8 @@ class SISA(torch.optim.Optimizer):
     - global projection update for w
 
     Notes:
-    - The paper has no external SGD-like lr multiplier; by default we keep
-      internal scaling (`use_internal_lr=True`).
+    - `use_internal_lr=True` uses `internal_lr` (initialized from constructor `lr`)
+      and ignores externally scheduled `group["lr"]`.
     - `weight_decay` is interpreted as lambda regularization in the global step.
     """
 
@@ -245,6 +245,7 @@ class SISA(torch.optim.Optimizer):
     ):
         defaults = {
             "lr": lr,
+            "internal_lr": lr,
             "beta": beta,
             "rho": rho,
             "sigma_init": sigma_init,
@@ -269,6 +270,7 @@ class SISA(torch.optim.Optimizer):
 
         for group in self.param_groups:
             lr = group["lr"]
+            internal_lr = group.get("internal_lr", lr)
             beta = group["beta"]
             rho = group["rho"]
             eps = group["eps"]
@@ -313,8 +315,8 @@ class SISA(torch.optim.Optimizer):
                     m.clamp_(max=eta_bound * eta_bound)
                 denom = sigma + rho * torch.sqrt(m) + eps
 
-                if not use_internal_lr:
-                    direction = lr * direction
+                step_lr = internal_lr if use_internal_lr else lr
+                direction = step_lr * direction
 
                 w_global = p.data
                 w_local_new = w_global - direction / denom
@@ -375,6 +377,7 @@ class NSISA(torch.optim.Optimizer):
     ):
         defaults = {
             "lr": lr,
+            "internal_lr": lr,
             "beta": beta,
             "momentum": momentum,
             "rho": rho,
@@ -416,6 +419,7 @@ class NSISA(torch.optim.Optimizer):
 
         for group in self.param_groups:
             lr = group["lr"]
+            internal_lr = group.get("internal_lr", lr)
             beta = group["beta"]
             momentum = group["momentum"]
             rho = group["rho"]
@@ -486,8 +490,8 @@ class NSISA(torch.optim.Optimizer):
                     zero_mask = direction == 0
                     direction = direction + (perturb_eps**step) * zero_mask.to(dtype=direction.dtype)
 
-                if not use_internal_lr:
-                    direction = lr * direction
+                step_lr = internal_lr if use_internal_lr else lr
+                direction = step_lr * direction
 
                 w_global = p.data
                 w_local_new = w_global - direction / denom

@@ -2,7 +2,7 @@ import numpy
 import torch
 
 from .adapters import get_adamw_cls, run_get_lr_cosine_schedule, run_muon_on_quadratic
-from basic.optimizer import Muon
+from basic.optimizer import Muon, SISA, NSISA
 
 
 def _optimize(opt_class) -> torch.Tensor:
@@ -146,3 +146,99 @@ def test_muon_momentum_buffer_tracks_raw_ema():
     opt.step()
     expected = grad * 1.9  # 0.9 * grad + grad
     torch.testing.assert_close(state["momentum_matrix"], expected)
+
+
+def test_sisa_internal_lr_scales_update_magnitude():
+    p_small = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float32))
+    p_large = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float32))
+
+    opt_small = SISA(
+        [p_small],
+        lr=0.01,
+        beta=0.9,
+        rho=1.0,
+        sigma_init=0.01,
+        sigma_gamma=1.0,
+        sigma_update_interval=1,
+        sigma_min=1e-6,
+        sigma_max=1e6,
+        eta_bound=None,
+        weight_decay=0.0,
+        cautious_decay=False,
+        use_internal_lr=True,
+    )
+    opt_large = SISA(
+        [p_large],
+        lr=1.0,
+        beta=0.9,
+        rho=1.0,
+        sigma_init=0.01,
+        sigma_gamma=1.0,
+        sigma_update_interval=1,
+        sigma_min=1e-6,
+        sigma_max=1e6,
+        eta_bound=None,
+        weight_decay=0.0,
+        cautious_decay=False,
+        use_internal_lr=True,
+    )
+
+    p_small.grad = torch.tensor([2.0], dtype=torch.float32)
+    p_large.grad = torch.tensor([2.0], dtype=torch.float32)
+    before = 1.0
+    opt_small.step()
+    opt_large.step()
+
+    small_delta = abs(float(p_small.detach()) - before)
+    large_delta = abs(float(p_large.detach()) - before)
+    assert small_delta < large_delta
+
+
+def test_nsisa_internal_lr_scales_update_magnitude():
+    p_small = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float32))
+    p_large = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float32))
+
+    opt_small = NSISA(
+        [p_small],
+        lr=0.01,
+        beta=0.9,
+        momentum=0.95,
+        rho=1.0,
+        sigma_init=0.01,
+        sigma_gamma=1.0,
+        sigma_update_interval=1,
+        sigma_min=1e-6,
+        sigma_max=1e6,
+        eta_bound=None,
+        perturb_eps=0.0,
+        weight_decay=0.0,
+        cautious_decay=False,
+        use_internal_lr=True,
+    )
+    opt_large = NSISA(
+        [p_large],
+        lr=1.0,
+        beta=0.9,
+        momentum=0.95,
+        rho=1.0,
+        sigma_init=0.01,
+        sigma_gamma=1.0,
+        sigma_update_interval=1,
+        sigma_min=1e-6,
+        sigma_max=1e6,
+        eta_bound=None,
+        perturb_eps=0.0,
+        weight_decay=0.0,
+        cautious_decay=False,
+        use_internal_lr=True,
+    )
+
+    p_small.grad = torch.tensor([2.0], dtype=torch.float32)
+    p_large.grad = torch.tensor([2.0], dtype=torch.float32)
+    before = 1.0
+    opt_small.step()
+    opt_large.step()
+
+    small_delta = abs(float(p_small.detach()) - before)
+    large_delta = abs(float(p_large.detach()) - before)
+    assert small_delta < large_delta
