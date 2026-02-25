@@ -190,9 +190,9 @@ def parse_args():
     parser.add_argument(
         "--optimizer-mode",
         type=str,
-        choices=["adamw", "muon_adamw"],
+        choices=["adamw", "muon_adamw", "sisa", "nsisa"],
         default="muon_adamw",
-        help="Choose optimizer setup: all params with AdamW, or split AdamW+Muon.",
+        help="Choose optimizer setup: all params with AdamW, or split AdamW+Muon or SISA/NSISA.",
     )
     ### AdamW
     parser.add_argument("--betas", nargs= 2, type=float, default=(0.9,0.99))
@@ -205,7 +205,22 @@ def parse_args():
     parser.add_argument("--c", type=float, default=2.0315)
     parser.add_argument("--momentum", type=float, default=0.95)
     parser.add_argument("--muon-lr-scale", type=float, default=1.0)
-    parser.add_argument("--adamw-lr-scale", type=float, default=None, help="AdamW LR multiplier. Default: 0.1 in muon_adamw mode, 1.0 in adamw mode.")
+    parser.add_argument(
+        "--adamw-lr-scale",
+        type=float,
+        default=None,
+        help="AdamW LR multiplier. Default: 0.1 in muon_adamw mode, 1.0 in adamw mode.",
+    )
+    ### SISA / NSISA
+    parser.add_argument("--sisa-beta", type=float, default=0.9)
+    parser.add_argument("--sisa-rho", type=float, default=1.0)
+    parser.add_argument("--sisa-sigma-init", type=float, default=1.0)
+    parser.add_argument("--sisa-sigma-eta", type=float, default=0.1)
+    parser.add_argument("--sisa-sigma-omega", type=float, default=10.0)
+    parser.add_argument("--sisa-sigma-min", type=float, default=1e-6)
+    parser.add_argument("--sisa-sigma-max", type=float, default=1e6)
+    parser.add_argument("--sisa-adaptive-sigma", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--nsisa-perturb-eps", type=float, default=1e-8)
 
     ## Learning rate scheduler 
     parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
@@ -266,11 +281,103 @@ def auto_run_name(args):
             slug += f"-muonlrx{args.muon_lr_scale:g}"
         if adamw_lr_scale != 1.0:
             slug += f"-adamwlrx{adamw_lr_scale:g}"
-    elif adamw_lr_scale != 1.0:
+    elif args.optimizer_mode == "adamw" and adamw_lr_scale != 1.0:
         slug += f"-adamwlrx{adamw_lr_scale:g}"
 
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
+
+
+def build_optimizer_bundle(
+    args: argparse.Namespace,
+    lm: torch.nn.Module,
+    adamw_lr_scale: float,
+) -> tuple[dict[str, torch.optim.Optimizer], dict[str, float]]:
+    if args.optimizer_mode == "adamw":
+        all_params = [p for p in lm.parameters() if p.requires_grad]
+        opt_adamw = optimizer.AdamW(
+            all_params,
+            lr=args.lr_max,
+            betas=args.betas,
+            weight_decay=args.weight_decay,
+            cautious_decay=args.cautious_decay,
+        )
+        return {"adamw": opt_adamw}, {"adamw": adamw_lr_scale}
+
+    if args.optimizer_mode == "muon_adamw":
+        muons_params, adamw_params = [], []
+        for name, p in lm.named_parameters():
+            if not p.requires_grad:
+                continue
+            use_muon = (
+                p.ndim == 2
+                and "embedding" not in name
+                and "lm_head" not in name
+                and not name.startswith("head.")
+            )
+            (muons_params if use_muon else adamw_params).append(p)
+
+        opt_muon = optimizer.Muon(
+            muons_params,
+            lr=args.lr_max,
+            weight_decay=args.weight_decay,
+            cautious_decay=args.cautious_decay,
+            a=args.a,
+            b=args.b,
+            c=args.c,
+            momentum=args.momentum,
+        )
+        opt_adamw = optimizer.AdamW(
+            adamw_params,
+            lr=args.lr_max,
+            betas=args.betas,
+            weight_decay=args.weight_decay,
+            cautious_decay=args.cautious_decay,
+        )
+        return {"muon": opt_muon, "adamw": opt_adamw}, {"muon": args.muon_lr_scale, "adamw": adamw_lr_scale}
+
+    if args.optimizer_mode == "sisa":
+        all_params = [p for p in lm.parameters() if p.requires_grad]
+        opt_sisa = optimizer.SISA(
+            all_params,
+            lr=args.lr_max,
+            beta=args.sisa_beta,
+            rho=args.sisa_rho,
+            sigma_init=args.sisa_sigma_init,
+            sigma_eta=args.sisa_sigma_eta,
+            sigma_omega=args.sisa_sigma_omega,
+            sigma_min=args.sisa_sigma_min,
+            sigma_max=args.sisa_sigma_max,
+            adaptive_sigma=args.sisa_adaptive_sigma,
+            weight_decay=args.weight_decay,
+            cautious_decay=args.cautious_decay,
+        )
+        return {"sisa": opt_sisa}, {"sisa": 1.0}
+
+    if args.optimizer_mode == "nsisa":
+        all_params = [p for p in lm.parameters() if p.requires_grad]
+        opt_nsisa = optimizer.NSISA(
+            all_params,
+            lr=args.lr_max,
+            beta=args.sisa_beta,
+            momentum=args.momentum,
+            rho=args.sisa_rho,
+            sigma_init=args.sisa_sigma_init,
+            sigma_eta=args.sisa_sigma_eta,
+            sigma_omega=args.sisa_sigma_omega,
+            sigma_min=args.sisa_sigma_min,
+            sigma_max=args.sisa_sigma_max,
+            adaptive_sigma=args.sisa_adaptive_sigma,
+            a=args.a,
+            b=args.b,
+            c=args.c,
+            perturb_eps=args.nsisa_perturb_eps,
+            weight_decay=args.weight_decay,
+            cautious_decay=args.cautious_decay,
+        )
+        return {"nsisa": opt_nsisa}, {"nsisa": 1.0}
+
+    raise ValueError(f"Unsupported optimizer_mode: {args.optimizer_mode}")
 
 
 def train():
@@ -373,51 +480,11 @@ def train():
     # model initializing
     LM = model.TransformerLM(**model_cfg).to(device)
 
-    optimizer_bundle: dict[str, torch.optim.Optimizer]
-    lr_scales: dict[str, float]
-    if args.optimizer_mode == "adamw":
-        all_params = [p for p in LM.parameters() if p.requires_grad]
-        opt_adamw = optimizer.AdamW(
-            all_params,
-            lr=args.lr_max,
-            betas=args.betas,
-            weight_decay=args.weight_decay,
-            cautious_decay=args.cautious_decay,
-        )
-        optimizer_bundle = {"adamw": opt_adamw}
-        lr_scales = {"adamw": adamw_lr_scale}
-    else:
-        muons_params, adamw_params = [], []
-        for name, p in LM.named_parameters():
-            if not p.requires_grad:
-                continue
-            use_muon = (
-                p.ndim == 2
-                and "embedding" not in name
-                and "lm_head" not in name
-                and not name.startswith("head.")
-            )
-            (muons_params if use_muon else adamw_params).append(p)
-
-        opt_muon = optimizer.Muon(
-            muons_params,
-            lr=args.lr_max,
-            weight_decay=args.weight_decay,
-            cautious_decay=args.cautious_decay,
-            a=args.a,
-            b=args.b,
-            c=args.c,
-            momentum=args.momentum,
-        )
-        opt_adamw = optimizer.AdamW(
-            adamw_params,
-            lr=args.lr_max,
-            betas=args.betas,
-            weight_decay=args.weight_decay,
-            cautious_decay=args.cautious_decay,
-        )
-        optimizer_bundle = {"muon": opt_muon, "adamw": opt_adamw}
-        lr_scales = {"muon": args.muon_lr_scale, "adamw": adamw_lr_scale}
+    optimizer_bundle, lr_scales = build_optimizer_bundle(
+        args=args,
+        lm=LM,
+        adamw_lr_scale=adamw_lr_scale,
+    )
 
     loss_fcn = losses.cross_entropy
 
