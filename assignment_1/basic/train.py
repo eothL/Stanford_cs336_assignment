@@ -220,7 +220,10 @@ def parse_args():
     parser.add_argument("--sisa-sigma-min", type=float, default=1e-6)
     parser.add_argument("--sisa-sigma-max", type=float, default=1e6)
     parser.add_argument("--sisa-eta-bound", type=float, default=0.0, help="Cap for sqrt(m). Use 0 to disable.")
+    parser.add_argument("--sisa-internal-lr", type=float, default=None, help="Fixed internal LR for SISA. Default None follows scheduler lr.")
+    parser.add_argument("--nsisa-internal-lr", type=float, default=None, help="Fixed internal LR for NSISA. Default None follows scheduler lr.")
     parser.add_argument("--nsisa-perturb-eps", type=float, default=1e-8)
+    parser.add_argument("--nsisa-max-ns-tensor-numel", type=int, default=8_000_000, help="Skip Newton-Schulz projection for tensors larger than this many elements. Use <=0 to disable limit.")
 
     ## Learning rate scheduler 
     parser.add_argument("--lr", type= float, default= 1e-3) # constant lr
@@ -329,6 +332,7 @@ def build_optimizer_bundle(
         opt_sisa = optimizer.SISA(
             all_params,
             lr=args.lr_max,
+            internal_lr=args.sisa_internal_lr,
             beta=args.sisa_beta,
             rho=args.sisa_rho,
             sigma_init=args.sisa_sigma_init,
@@ -348,6 +352,7 @@ def build_optimizer_bundle(
         opt_nsisa = optimizer.NSISA(
             all_params,
             lr=args.lr_max,
+            internal_lr=args.nsisa_internal_lr,
             beta=args.sisa_beta,
             momentum=args.momentum,
             rho=args.sisa_rho,
@@ -364,6 +369,9 @@ def build_optimizer_bundle(
             weight_decay=args.weight_decay,
             cautious_decay=args.cautious_decay,
             use_internal_lr=True,
+            max_ns_tensor_numel=(
+                None if args.nsisa_max_ns_tensor_numel <= 0 else args.nsisa_max_ns_tensor_numel
+            ),
         )
         return {"nsisa": opt_nsisa}, {}
 

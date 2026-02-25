@@ -242,3 +242,137 @@ def test_nsisa_internal_lr_scales_update_magnitude():
     small_delta = abs(float(p_small.detach()) - before)
     large_delta = abs(float(p_large.detach()) - before)
     assert small_delta < large_delta
+
+
+def test_sisa_internal_lr_none_follows_group_lr():
+    p_small = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float32))
+    p_large = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float32))
+
+    opt_small = SISA(
+        [p_small],
+        lr=1.0,
+        internal_lr=None,
+        beta=0.9,
+        rho=1.0,
+        sigma_init=0.01,
+        sigma_gamma=1.0,
+        sigma_update_interval=1,
+        sigma_min=1e-6,
+        sigma_max=1e6,
+        eta_bound=None,
+        weight_decay=0.0,
+        cautious_decay=False,
+        use_internal_lr=True,
+    )
+    opt_large = SISA(
+        [p_large],
+        lr=1.0,
+        internal_lr=None,
+        beta=0.9,
+        rho=1.0,
+        sigma_init=0.01,
+        sigma_gamma=1.0,
+        sigma_update_interval=1,
+        sigma_min=1e-6,
+        sigma_max=1e6,
+        eta_bound=None,
+        weight_decay=0.0,
+        cautious_decay=False,
+        use_internal_lr=True,
+    )
+
+    opt_small.param_groups[0]["lr"] = 1e-3
+    opt_large.param_groups[0]["lr"] = 1e-1
+    p_small.grad = torch.tensor([2.0], dtype=torch.float32)
+    p_large.grad = torch.tensor([2.0], dtype=torch.float32)
+
+    before = 1.0
+    opt_small.step()
+    opt_large.step()
+    small_delta = abs(float(p_small.detach()) - before)
+    large_delta = abs(float(p_large.detach()) - before)
+    assert small_delta < large_delta
+
+
+def test_nsisa_internal_lr_none_follows_group_lr():
+    p_small = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float32))
+    p_large = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float32))
+
+    opt_small = NSISA(
+        [p_small],
+        lr=1.0,
+        internal_lr=None,
+        beta=0.9,
+        momentum=0.95,
+        rho=1.0,
+        sigma_init=0.01,
+        sigma_gamma=1.0,
+        sigma_update_interval=1,
+        sigma_min=1e-6,
+        sigma_max=1e6,
+        eta_bound=None,
+        perturb_eps=0.0,
+        weight_decay=0.0,
+        cautious_decay=False,
+        use_internal_lr=True,
+    )
+    opt_large = NSISA(
+        [p_large],
+        lr=1.0,
+        internal_lr=None,
+        beta=0.9,
+        momentum=0.95,
+        rho=1.0,
+        sigma_init=0.01,
+        sigma_gamma=1.0,
+        sigma_update_interval=1,
+        sigma_min=1e-6,
+        sigma_max=1e6,
+        eta_bound=None,
+        perturb_eps=0.0,
+        weight_decay=0.0,
+        cautious_decay=False,
+        use_internal_lr=True,
+    )
+
+    opt_small.param_groups[0]["lr"] = 1e-3
+    opt_large.param_groups[0]["lr"] = 1e-1
+    p_small.grad = torch.tensor([2.0], dtype=torch.float32)
+    p_large.grad = torch.tensor([2.0], dtype=torch.float32)
+
+    before = 1.0
+    opt_small.step()
+    opt_large.step()
+    small_delta = abs(float(p_small.detach()) - before)
+    large_delta = abs(float(p_large.detach()) - before)
+    assert small_delta < large_delta
+
+
+def test_nsisa_skips_newton_schulz_on_large_tensors():
+    param = torch.nn.Parameter(torch.ones((64, 64), dtype=torch.float32))
+    opt = NSISA(
+        [param],
+        lr=1e-2,
+        internal_lr=None,
+        beta=0.9,
+        momentum=0.95,
+        rho=1.0,
+        sigma_init=0.01,
+        sigma_gamma=1.0,
+        sigma_update_interval=1,
+        sigma_min=1e-6,
+        sigma_max=1e6,
+        eta_bound=None,
+        perturb_eps=0.0,
+        weight_decay=0.0,
+        cautious_decay=False,
+        use_internal_lr=True,
+        max_ns_tensor_numel=1,  # force fallback path
+    )
+
+    def _raise_if_called(*args, **kwargs):
+        raise AssertionError("Newton-Schulz should be skipped for large tensors.")
+
+    opt._ns_polynomial = _raise_if_called  # type: ignore[method-assign]
+    param.grad = torch.ones_like(param)
+    opt.step()

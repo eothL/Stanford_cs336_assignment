@@ -221,8 +221,8 @@ class SISA(torch.optim.Optimizer):
     - global projection update for w
 
     Notes:
-    - `use_internal_lr=True` uses `internal_lr` (initialized from constructor `lr`)
-      and ignores externally scheduled `group["lr"]`.
+    - `use_internal_lr=True` uses `internal_lr` when it is set.
+    - When `internal_lr=None`, the optimizer follows scheduler-updated `group["lr"]`.
     - `weight_decay` is interpreted as lambda regularization in the global step.
     """
 
@@ -230,6 +230,7 @@ class SISA(torch.optim.Optimizer):
         self,
         params: Iterable[torch.nn.Parameter] | Iterable[dict[str, Any]],
         lr: float = 1.0,
+        internal_lr: float | None = None,
         beta: float = 0.9,
         rho: float = 1.0,
         sigma_init: float = 0.01,
@@ -245,7 +246,7 @@ class SISA(torch.optim.Optimizer):
     ):
         defaults = {
             "lr": lr,
-            "internal_lr": lr,
+            "internal_lr": internal_lr,
             "beta": beta,
             "rho": rho,
             "sigma_init": sigma_init,
@@ -270,7 +271,7 @@ class SISA(torch.optim.Optimizer):
 
         for group in self.param_groups:
             lr = group["lr"]
-            internal_lr = group.get("internal_lr", lr)
+            internal_lr = group.get("internal_lr", None)
             beta = group["beta"]
             rho = group["rho"]
             eps = group["eps"]
@@ -315,7 +316,8 @@ class SISA(torch.optim.Optimizer):
                     m.clamp_(max=eta_bound * eta_bound)
                 denom = sigma + rho * torch.sqrt(m) + eps
 
-                step_lr = internal_lr if use_internal_lr else lr
+                # If internal_lr is None, we follow group["lr"] (scheduler-updated).
+                step_lr = internal_lr if (use_internal_lr and internal_lr is not None) else lr
                 direction = step_lr * direction
 
                 w_global = p.data
@@ -351,12 +353,15 @@ class NSISA(torch.optim.Optimizer):
     Differences vs SISA:
     - Newton-Schulz transformed momentum state O_t replaces raw gradient.
     - epsilon^t mask perturbation on zero entries.
+    - Newton-Schulz can be skipped on large tensors via `max_ns_tensor_numel` to
+      avoid large temporary allocations on embeddings/lm heads.
     """
 
     def __init__(
         self,
         params: Iterable[torch.nn.Parameter] | Iterable[dict[str, Any]],
         lr: float = 1.0,
+        internal_lr: float | None = None,
         beta: float = 0.9,
         momentum: float = 0.95,
         rho: float = 1.0,
@@ -374,10 +379,11 @@ class NSISA(torch.optim.Optimizer):
         weight_decay: float = 0.0,
         cautious_decay: bool = False,
         use_internal_lr: bool = True,
+        max_ns_tensor_numel: int | None = 8_000_000,
     ):
         defaults = {
             "lr": lr,
-            "internal_lr": lr,
+            "internal_lr": internal_lr,
             "beta": beta,
             "momentum": momentum,
             "rho": rho,
@@ -395,6 +401,7 @@ class NSISA(torch.optim.Optimizer):
             "weight_decay": weight_decay,
             "cautious_decay": cautious_decay,
             "use_internal_lr": use_internal_lr,
+            "max_ns_tensor_numel": max_ns_tensor_numel,
         }
         super().__init__(params, defaults)
 
@@ -419,7 +426,7 @@ class NSISA(torch.optim.Optimizer):
 
         for group in self.param_groups:
             lr = group["lr"]
-            internal_lr = group.get("internal_lr", lr)
+            internal_lr = group.get("internal_lr", None)
             beta = group["beta"]
             momentum = group["momentum"]
             rho = group["rho"]
@@ -436,6 +443,7 @@ class NSISA(torch.optim.Optimizer):
             b = group["b"]
             c = group["c"]
             perturb_eps = group["perturb_eps"]
+            max_ns_tensor_numel = group["max_ns_tensor_numel"]
 
             for p in group["params"]:
                 grad = p.grad
@@ -469,7 +477,11 @@ class NSISA(torch.optim.Optimizer):
 
                 # Newton-Schulz projection is matrix-defined.
                 # For vectors/scalars we keep the momentum buffer directly.
-                if p.ndim >= 2:
+                apply_ns = (
+                    p.ndim >= 2
+                    and (max_ns_tensor_numel is None or p.numel() <= max_ns_tensor_numel)
+                )
+                if apply_ns:
                     b_mat = b_buffer if b_buffer.ndim == 2 else b_buffer.reshape(b_buffer.shape[0], -1)
                     b_norm = torch.linalg.norm(b_mat)
                     if torch.isnan(b_norm) or torch.isinf(b_norm):
@@ -490,7 +502,8 @@ class NSISA(torch.optim.Optimizer):
                     zero_mask = direction == 0
                     direction = direction + (perturb_eps**step) * zero_mask.to(dtype=direction.dtype)
 
-                step_lr = internal_lr if use_internal_lr else lr
+                # If internal_lr is None, we follow group["lr"] (scheduler-updated).
+                step_lr = internal_lr if (use_internal_lr and internal_lr is not None) else lr
                 direction = step_lr * direction
 
                 w_global = p.data
