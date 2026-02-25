@@ -1,6 +1,5 @@
-import torch 
-import math
 import torch
+import math
 from torch import Tensor
 from collections.abc import Callable, Iterable
 from typing import Optional, Any
@@ -177,6 +176,309 @@ class Muon(torch.optim.Optimizer):
 
         return loss
     
+
+def _adapt_penalty(
+    sigma: float,
+    primal_residual_norm: float,
+    dual_residual_norm: float,
+    eta: float,
+    omega: float,
+    sigma_min: float,
+    sigma_max: float,
+) -> float:
+    """
+    Penalty adaptation used in Eq. (4) of the SISA/NSISA paper.
+    We keep this as a local analogue (single-process training).
+    """
+    if primal_residual_norm > omega * dual_residual_norm:
+        return max(sigma * (1.0 - eta), sigma_min)
+    if dual_residual_norm > omega * primal_residual_norm:
+        return min(sigma * (1.0 + eta), sigma_max)
+    return sigma
+
+
+class SISA(torch.optim.Optimizer):
+    """
+    Single-model adaptation of SISA (arXiv:2502.10784, Alg. 2).
+
+    We keep per-parameter:
+    - pi: dual-like accumulator
+    - m: second moment of (pi + grad)^2
+    - sigma: adaptive penalty
+    rho must be > 0
+    sigma must be initialized > 0 and is adapted according to the primal/dual residuals as in the original SISA paper.
+    beta must be in [0, 1) and controls the momentum on the second moment (m).
+    sigma_eta must be in [0, 1) and controls the adaptation rate of sigma.
+    sigma_omega must be > 0 and controls the sensitivity of sigma adaptation to the primal/dual residuals.
+    weight_decay is applied in a decoupled manner, either cautiously (only on parameters sharing the same direction as their state) or uniformly.
+    eps is added to the denominator for numerical stability.
+    """
+
+    def __init__(
+        self,
+        params: Iterable[torch.nn.Parameter] | Iterable[dict[str, Any]],
+        lr: float = 1.0,
+        beta: float = 0.9,
+        rho: float = 1.0,
+        sigma_init: float = 1.0,
+        sigma_eta: float = 0.1,
+        sigma_omega: float = 10.0,
+        sigma_min: float = 1e-6,
+        sigma_max: float = 1e6,
+        adaptive_sigma: bool = True,
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+        cautious_decay: bool = False,
+    ):
+        defaults = {
+            "lr": lr,
+            "beta": beta,
+            "rho": rho,
+            "sigma_init": sigma_init,
+            "sigma_eta": sigma_eta,
+            "sigma_omega": sigma_omega,
+            "sigma_min": sigma_min,
+            "sigma_max": sigma_max,
+            "adaptive_sigma": adaptive_sigma,
+            "eps": eps,
+            "weight_decay": weight_decay,
+            "cautious_decay": cautious_decay,
+        }
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure: Optional[Callable] = None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta = group["beta"]
+            rho = group["rho"]
+            eps = group["eps"]
+            wd = group["weight_decay"]
+            cautious_decay = group["cautious_decay"]
+            adaptive_sigma = group["adaptive_sigma"]
+            sigma_eta = group["sigma_eta"]
+            sigma_omega = group["sigma_omega"]
+            sigma_min = group["sigma_min"]
+            sigma_max = group["sigma_max"]
+
+            for p in group["params"]:
+                grad = p.grad
+                if grad is None:
+                    continue
+
+                state = self.state[p]
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["m"] = torch.zeros_like(p.data)
+                    state["pi"] = torch.zeros_like(p.data)
+                    state["prev_w"] = p.data.detach().clone()
+                    state["sigma"] = float(group["sigma_init"])
+
+                state["step"] += 1
+                m = state["m"]
+                pi = state["pi"]
+                sigma = float(state["sigma"])
+
+                direction = pi + grad
+                m.mul_(beta).addcmul_(direction, direction, value=1 - beta)
+                denom = sigma + rho * torch.sqrt(m) + eps
+
+                if cautious_decay:
+                    CautiousWeightDecay(param=p.data, state=direction, lr=lr, wd=wd)
+                elif wd > 0:
+                    p.data.mul_(1 - lr * wd)
+
+                old_w = p.data.detach().clone()
+                p.data.addcdiv_(direction, denom, value=-lr)
+                step_delta = p.data - old_w
+                pi.add_(step_delta, alpha=sigma)
+
+                if adaptive_sigma:
+                    prev_w = state["prev_w"]
+                    primal_residual_norm = float(torch.linalg.norm(step_delta))
+                    dual_residual_norm = float(sigma * torch.linalg.norm(old_w - prev_w))
+                    sigma = _adapt_penalty(
+                        sigma=sigma,
+                        primal_residual_norm=primal_residual_norm,
+                        dual_residual_norm=dual_residual_norm,
+                        eta=sigma_eta,
+                        omega=sigma_omega,
+                        sigma_min=sigma_min,
+                        sigma_max=sigma_max,
+                    )
+                    state["sigma"] = sigma
+
+                state["prev_w"].copy_(old_w)
+
+        return loss
+
+
+class NSISA(torch.optim.Optimizer):
+    """
+    Single-model adaptation of NSISA (arXiv:2502.10784, Alg. 3).
+
+    Differences from SISA:
+    - Replace raw gradients with Newton-Schulz transformed momentum state.
+    - Add epsilon^t perturbation on zero entries for numerical safety.
+    """
+
+    def __init__(
+        self,
+        params: Iterable[torch.nn.Parameter] | Iterable[dict[str, Any]],
+        lr: float = 1.0,
+        beta: float = 0.9,
+        momentum: float = 0.95,
+        rho: float = 1.0,
+        sigma_init: float = 1.0,
+        sigma_eta: float = 0.1,
+        sigma_omega: float = 10.0,
+        sigma_min: float = 1e-6,
+        sigma_max: float = 1e6,
+        adaptive_sigma: bool = True,
+        a: float = 3.4445,
+        b: float = -4.7750,
+        c: float = 2.0315,
+        perturb_eps: float = 1e-8,
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+        cautious_decay: bool = False,
+    ):
+        defaults = {
+            "lr": lr,
+            "beta": beta,
+            "momentum": momentum,
+            "rho": rho,
+            "sigma_init": sigma_init,
+            "sigma_eta": sigma_eta,
+            "sigma_omega": sigma_omega,
+            "sigma_min": sigma_min,
+            "sigma_max": sigma_max,
+            "adaptive_sigma": adaptive_sigma,
+            "a": a,
+            "b": b,
+            "c": c,
+            "perturb_eps": perturb_eps,
+            "eps": eps,
+            "weight_decay": weight_decay,
+            "cautious_decay": cautious_decay,
+        }
+        super().__init__(params, defaults)
+
+    @staticmethod
+    def _ns_polynomial(mat: Tensor, a: float, b: float, c: float) -> Tensor:
+        rows, cols = mat.shape
+        if rows > cols:
+            gram = mat.transpose(-2, -1) @ mat
+            gram2 = gram @ gram
+            return a * mat + b * (mat @ gram) + c * (mat @ gram2)
+
+        gram = mat @ mat.transpose(-2, -1)
+        gram2 = gram @ gram
+        return a * mat + b * (gram @ mat) + c * (gram2 @ mat)
+
+    @torch.no_grad()
+    def step(self, closure: Optional[Callable] = None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            beta = group["beta"]
+            momentum = group["momentum"]
+            rho = group["rho"]
+            eps = group["eps"]
+            wd = group["weight_decay"]
+            cautious_decay = group["cautious_decay"]
+            adaptive_sigma = group["adaptive_sigma"]
+            sigma_eta = group["sigma_eta"]
+            sigma_omega = group["sigma_omega"]
+            sigma_min = group["sigma_min"]
+            sigma_max = group["sigma_max"]
+            a = group["a"]
+            b = group["b"]
+            c = group["c"]
+            perturb_eps = group["perturb_eps"]
+
+            for p in group["params"]:
+                grad = p.grad
+                if grad is None:
+                    continue
+
+                state = self.state[p]
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["m"] = torch.zeros_like(p.data)
+                    state["b"] = torch.zeros_like(p.data)
+                    state["pi"] = torch.zeros_like(p.data)
+                    state["prev_w"] = p.data.detach().clone()
+                    state["sigma"] = float(group["sigma_init"])
+
+                state["step"] += 1
+                t = state["step"]
+                m = state["m"]
+                b_buffer = state["b"]
+                pi = state["pi"]
+                sigma = float(state["sigma"])
+
+                b_buffer.mul_(momentum).add_(grad)
+
+                # Newton-Schulz projection is matrix-defined.
+                # For vectors/scalars we keep the momentum buffer directly.
+                if p.ndim >= 2:
+                    b_mat = b_buffer if b_buffer.ndim == 2 else b_buffer.reshape(b_buffer.shape[0], -1)
+                    b_norm = torch.linalg.norm(b_mat)
+                    if torch.isnan(b_norm) or torch.isinf(b_norm):
+                        continue
+                    x = b_mat / (b_norm + eps)
+                    o_mat = self._ns_polynomial(x, a=a, b=b, c=c)
+                    o = o_mat.reshape_as(b_buffer)
+                else:
+                    o = b_buffer
+
+                direction = pi + o
+                m.mul_(beta).addcmul_(direction, direction, value=1 - beta)
+                denom = sigma + rho * torch.sqrt(m) + eps
+
+                if perturb_eps > 0:
+                    zero_mask = direction == 0
+                    direction = direction + (perturb_eps**t) * zero_mask.to(dtype=direction.dtype)
+
+                if cautious_decay:
+                    CautiousWeightDecay(param=p.data, state=direction, lr=lr, wd=wd)
+                elif wd > 0:
+                    p.data.mul_(1 - lr * wd)
+
+                old_w = p.data.detach().clone()
+                p.data.addcdiv_(direction, denom, value=-lr)
+                step_delta = p.data - old_w
+                pi.add_(step_delta, alpha=sigma)
+
+                if adaptive_sigma:
+                    prev_w = state["prev_w"]
+                    primal_residual_norm = float(torch.linalg.norm(step_delta))
+                    dual_residual_norm = float(sigma * torch.linalg.norm(old_w - prev_w))
+                    sigma = _adapt_penalty(
+                        sigma=sigma,
+                        primal_residual_norm=primal_residual_norm,
+                        dual_residual_norm=dual_residual_norm,
+                        eta=sigma_eta,
+                        omega=sigma_omega,
+                        sigma_min=sigma_min,
+                        sigma_max=sigma_max,
+                    )
+                    state["sigma"] = sigma
+
+                state["prev_w"].copy_(old_w)
+
+        return loss
+
 
 def gradient_clipping(params: Iterable[torch.nn.Parameter], M: float, eps: float = 1e-6,):
     # l2_norm = torch.norm(params)
