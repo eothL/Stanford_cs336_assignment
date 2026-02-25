@@ -520,6 +520,11 @@ def train():
         epoch_start = time.time()
         # forward
         lr = scheduler.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
+        ramp_alpha = None
+        if args.activation_fcn.lower() == "ramp_relu":
+            ramp_alpha = scheduler.ramp_relu_alpha(t=epoch, Tw=warmup, Tc=cosine_cycle)
+            LM.set_ramp_alpha(ramp_alpha)
+
         train_loss = run_epoch(
             LM=LM_compil,
             loader=train_loader,
@@ -543,6 +548,8 @@ def train():
                 "lr": lr,
                 "epoch_time": epoch_time
             }
+        if ramp_alpha is not None:
+            metrics["ramp_alpha"] = ramp_alpha
         for opt_name, scale in lr_scales.items():
             metrics[f"lr_{opt_name}"] = lr * scale
 

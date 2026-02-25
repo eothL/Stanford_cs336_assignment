@@ -138,8 +138,18 @@ class positionwise_feedforward(nn.Module):
             self.w1_proj = Linear(self.d_model, self.d_ff, **self.factory_kwargs, bias=bias)
             self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
             self._forward_impl = self._forward_sq_relu
+        elif self.activation_fcn == "ramp_relu":
+            self.w1_proj = Linear(self.d_model, self.d_ff, **self.factory_kwargs, bias=bias)
+            self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
+            self.register_buffer(
+                "ramp_alpha",
+                torch.tensor(0.0, dtype=torch.float32, device=device),
+                persistent=False,
+            )
+            self._forward_impl = self._forward_ramp_relu
         else:
-            raise ValueError(f"Unknown activation function: {activation_fcn}, only the following activation function are supported:['swiglu', 'relu', 'sq_relu'] ")
+            raise ValueError(f"Unknown activation function: {activation_fcn}, only the following activation function are "
+                "supported:['swiglu', 'relu', 'sq_relu', 'ramp_relu'] ")
 
     def forward(self, x:Float[Tensor, "... d_model"])-> Float[Tensor, "... d_model"]:
         return self._forward_impl(x=x)
@@ -154,6 +164,20 @@ class positionwise_feedforward(nn.Module):
         h:torch.Tensor = self.w1_proj(x)
         h = h.clamp_min(0)
         return self.w2_proj(h.pow(2))
+
+    # Ramp ReLU activation function with cosine ramping between ReLU and ReLU^2 controlled by self.ramp_alpha
+    def _forward_ramp_relu(self, x: Float[Tensor, "... d_model"]) -> Float[Tensor, "... d_model"]:
+        h: torch.Tensor = self.w1_proj(x)
+        h_relu = h.clamp_min(0)
+        alpha = self.ramp_alpha.to(dtype=h_relu.dtype, device=h_relu.device)
+        h_mix = (1.0 - alpha) * h_relu + alpha * h_relu.pow(2)
+        return self.w2_proj(h_mix)
+
+    def set_ramp_alpha(self, alpha: float) -> None:
+        if not hasattr(self, "ramp_alpha"):
+            return
+        alpha = float(max(0.0, min(1.0, alpha)))
+        self.ramp_alpha.fill_(alpha)
     
     #SwiGLU activation function
     @staticmethod
@@ -476,6 +500,9 @@ class transformer_block(nn.Module):
         attn_out = self.MHA_layer(x, token_positions = token_positions, rope = self.rope)
         h_norm = self.rmsnorm1(x + attn_out)
         return self.rmsnorm2(h_norm + self.FFN(h_norm))
+
+    def set_ramp_alpha(self, alpha: float) -> None:
+        self.FFN.set_ramp_alpha(alpha)
     
 
 # Model 
@@ -532,3 +559,7 @@ class TransformerLM(nn.Module):
             h = block(h, token_positions = token_positions)
         logits = self.head(h)
         return logits
+
+    def set_ramp_alpha(self, alpha: float) -> None:
+        for block in self.transformer_blocks:
+            block.set_ramp_alpha(alpha)
