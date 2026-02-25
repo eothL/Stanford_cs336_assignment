@@ -125,7 +125,7 @@ def run_epoch(
 
             for name, opt in optimizers.items():
                 opt.zero_grad(set_to_none=True) # cleaning grads from previous step
-                # updating learning rate 
+                # updating learning rate
                 scaled_lr = lr if lr is not None else opt.param_groups[0]["lr"]
                 scaled_lr *= lr_scales.get(name, 1.0)
                 for g in opt.param_groups:
@@ -214,12 +214,12 @@ def parse_args():
     ### SISA / NSISA
     parser.add_argument("--sisa-beta", type=float, default=0.9)
     parser.add_argument("--sisa-rho", type=float, default=1.0)
-    parser.add_argument("--sisa-sigma-init", type=float, default=1.0)
-    parser.add_argument("--sisa-sigma-eta", type=float, default=0.1)
-    parser.add_argument("--sisa-sigma-omega", type=float, default=10.0)
+    parser.add_argument("--sisa-sigma-init", type=float, default=0.01)
+    parser.add_argument("--sisa-sigma-gamma", type=float, default=1.0)
+    parser.add_argument("--sisa-sigma-update-interval", type=int, default=1, help="k0 in the supplementary periodic sigma update.")
     parser.add_argument("--sisa-sigma-min", type=float, default=1e-6)
     parser.add_argument("--sisa-sigma-max", type=float, default=1e6)
-    parser.add_argument("--sisa-adaptive-sigma", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--sisa-eta-bound", type=float, default=0.0, help="Cap for sqrt(m). Use 0 to disable.")
     parser.add_argument("--nsisa-perturb-eps", type=float, default=1e-8)
 
     ## Learning rate scheduler 
@@ -250,10 +250,6 @@ def parse_args():
     return parser.parse_args()
 
 def auto_run_name(args):
-    adamw_lr_scale = args.adamw_lr_scale
-    if adamw_lr_scale is None:
-        adamw_lr_scale = 0.1 if args.optimizer_mode == "muon_adamw" else 1.0
-
     cfg = {
           "L": args.num_layers,
           "H": args.num_heads,
@@ -261,28 +257,20 @@ def auto_run_name(args):
           "ctx": args.context_length,
           "bs": args.batch_size,
           "lrmax": args.lr_max,
+          "m_norm": args.clip_threshold,
           "wd": args.weight_decay,
           "beta1": args.betas[0],
           "beta2": args.betas[1],
-          "m_norm": args.clip_threshold,
           "dataset": args.train_dataset,
           "act_fcn": args.activation_fcn,
           "optimizer_mode": args.optimizer_mode,
-          "muon_lr_scale": args.muon_lr_scale,
-          "adamw_lr_scale": adamw_lr_scale,
       }
     
     slug = f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}-bs{cfg['bs']}-lr{cfg['lrmax']}-m_norm{cfg['m_norm']}"        
-    slug += f"-c_wd{cfg['wd']}" if args.cautious_decay is True else f"-wd{cfg['wd']}" 
+    slug += f"-c_wd{cfg['wd']}" if args.cautious_decay is True else f"-wd{cfg['wd']}"
+    slug += f"-b1{cfg['beta1']}-b2{cfg['beta2']}"
     slug += f"-{cfg['act_fcn']}"
     slug += f"-{args.optimizer_mode}"
-    if args.optimizer_mode == "muon_adamw":
-        if args.muon_lr_scale != 1.0:
-            slug += f"-muonlrx{args.muon_lr_scale:g}"
-        if adamw_lr_scale != 1.0:
-            slug += f"-adamwlrx{adamw_lr_scale:g}"
-    elif args.optimizer_mode == "adamw" and adamw_lr_scale != 1.0:
-        slug += f"-adamwlrx{adamw_lr_scale:g}"
 
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
@@ -344,15 +332,16 @@ def build_optimizer_bundle(
             beta=args.sisa_beta,
             rho=args.sisa_rho,
             sigma_init=args.sisa_sigma_init,
-            sigma_eta=args.sisa_sigma_eta,
-            sigma_omega=args.sisa_sigma_omega,
+            sigma_gamma=args.sisa_sigma_gamma,
+            sigma_update_interval=args.sisa_sigma_update_interval,
             sigma_min=args.sisa_sigma_min,
             sigma_max=args.sisa_sigma_max,
-            adaptive_sigma=args.sisa_adaptive_sigma,
+            eta_bound=args.sisa_eta_bound if args.sisa_eta_bound > 0 else None,
             weight_decay=args.weight_decay,
             cautious_decay=args.cautious_decay,
+            use_internal_lr=True,
         )
-        return {"sisa": opt_sisa}, {"sisa": 1.0}
+        return {"sisa": opt_sisa}, {}
 
     if args.optimizer_mode == "nsisa":
         all_params = [p for p in lm.parameters() if p.requires_grad]
@@ -363,19 +352,20 @@ def build_optimizer_bundle(
             momentum=args.momentum,
             rho=args.sisa_rho,
             sigma_init=args.sisa_sigma_init,
-            sigma_eta=args.sisa_sigma_eta,
-            sigma_omega=args.sisa_sigma_omega,
+            sigma_gamma=args.sisa_sigma_gamma,
+            sigma_update_interval=args.sisa_sigma_update_interval,
             sigma_min=args.sisa_sigma_min,
             sigma_max=args.sisa_sigma_max,
-            adaptive_sigma=args.sisa_adaptive_sigma,
+            eta_bound=args.sisa_eta_bound if args.sisa_eta_bound > 0 else None,
             a=args.a,
             b=args.b,
             c=args.c,
             perturb_eps=args.nsisa_perturb_eps,
             weight_decay=args.weight_decay,
             cautious_decay=args.cautious_decay,
+            use_internal_lr=True,
         )
-        return {"nsisa": opt_nsisa}, {"nsisa": 1.0}
+        return {"nsisa": opt_nsisa}, {}
 
     raise ValueError(f"Unsupported optimizer_mode: {args.optimizer_mode}")
 
@@ -550,6 +540,14 @@ def train():
             }
         if ramp_alpha is not None:
             metrics["ramp_alpha"] = ramp_alpha
+        for opt_name, opt in optimizer_bundle.items():
+            sigma_values = [
+                state["sigma"]
+                for state in opt.state.values()
+                if isinstance(state, dict) and "sigma" in state
+            ]
+            if sigma_values:
+                metrics[f"sigma_{opt_name}"] = float(np.mean(sigma_values))
         for opt_name, scale in lr_scales.items():
             metrics[f"lr_{opt_name}"] = lr * scale
 

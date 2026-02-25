@@ -177,41 +177,53 @@ class Muon(torch.optim.Optimizer):
         return loss
     
 
-def _adapt_penalty(
+def _sigma_step_update(
     sigma: float,
-    primal_residual_norm: float,
-    dual_residual_norm: float,
-    eta: float,
-    omega: float,
+    gamma: float,
+    step: int,
+    update_interval: int,
     sigma_min: float,
     sigma_max: float,
 ) -> float:
     """
-    Penalty adaptation used in Eq. (4) of the SISA/NSISA paper.
-    We keep this as a local analogue (single-process training).
+    Paper-faithful penalty update backbone:
+    sigma_{l+1} = sigma_l / gamma_l
+    Optionally applied every k0 steps (supplementary periodic update).
     """
-    if primal_residual_norm > omega * dual_residual_norm:
-        return max(sigma * (1.0 - eta), sigma_min)
-    if dual_residual_norm > omega * primal_residual_norm:
-        return min(sigma * (1.0 + eta), sigma_max)
-    return sigma
+    if update_interval <= 1 or step % update_interval == 0:
+        sigma = sigma / gamma
+    return min(max(float(sigma), sigma_min), sigma_max)
+
+
+def _admm_global_update(
+    w_local: Tensor,
+    pi: Tensor,
+    sigma: float,
+    lambda_reg: float,
+    eps: float,
+) -> Tensor:
+    """
+    One-client analogue of the ADMM global step.
+    For lambda_reg=0: w_next = w_local + pi / sigma.
+    """
+    if lambda_reg > 0:
+        return (sigma * w_local + pi) / (sigma + lambda_reg)
+    return w_local + pi / (sigma + eps)
 
 
 class SISA(torch.optim.Optimizer):
     """
-    Single-model adaptation of SISA (arXiv:2502.10784, Alg. 2).
+    Single-client approximation of SISA (Alg. 2, Eq. 28/29).
 
-    We keep per-parameter:
-    - pi: dual-like accumulator
-    - m: second moment of (pi + grad)^2
-    - sigma: adaptive penalty
-    rho must be > 0
-    sigma must be initialized > 0 and is adapted according to the primal/dual residuals as in the original SISA paper.
-    beta must be in [0, 1) and controls the momentum on the second moment (m).
-    sigma_eta must be in [0, 1) and controls the adaptation rate of sigma.
-    sigma_omega must be > 0 and controls the sensitivity of sigma adaptation to the primal/dual residuals.
-    weight_decay is applied in a decoupled manner, either cautiously (only on parameters sharing the same direction as their state) or uniformly.
-    eps is added to the denominator for numerical stability.
+    This follows the ADMM-style structure:
+    - local step on w_i with preconditioner (sigma + rho * sqrt(m))
+    - dual update pi_i
+    - global projection update for w
+
+    Notes:
+    - The paper has no external SGD-like lr multiplier; by default we keep
+      internal scaling (`use_internal_lr=True`).
+    - `weight_decay` is interpreted as lambda regularization in the global step.
     """
 
     def __init__(
@@ -220,29 +232,31 @@ class SISA(torch.optim.Optimizer):
         lr: float = 1.0,
         beta: float = 0.9,
         rho: float = 1.0,
-        sigma_init: float = 1.0,
-        sigma_eta: float = 0.1,
-        sigma_omega: float = 10.0,
+        sigma_init: float = 0.01,
+        sigma_gamma: float = 1.0,
+        sigma_update_interval: int = 1,
         sigma_min: float = 1e-6,
         sigma_max: float = 1e6,
-        adaptive_sigma: bool = True,
+        eta_bound: float | None = None,
         eps: float = 1e-8,
         weight_decay: float = 0.0,
         cautious_decay: bool = False,
+        use_internal_lr: bool = True,
     ):
         defaults = {
             "lr": lr,
             "beta": beta,
             "rho": rho,
             "sigma_init": sigma_init,
-            "sigma_eta": sigma_eta,
-            "sigma_omega": sigma_omega,
+            "sigma_gamma": sigma_gamma,
+            "sigma_update_interval": sigma_update_interval,
             "sigma_min": sigma_min,
             "sigma_max": sigma_max,
-            "adaptive_sigma": adaptive_sigma,
+            "eta_bound": eta_bound,
             "eps": eps,
             "weight_decay": weight_decay,
             "cautious_decay": cautious_decay,
+            "use_internal_lr": use_internal_lr,
         }
         super().__init__(params, defaults)
 
@@ -258,13 +272,14 @@ class SISA(torch.optim.Optimizer):
             beta = group["beta"]
             rho = group["rho"]
             eps = group["eps"]
-            wd = group["weight_decay"]
+            lambda_reg = group["weight_decay"]
             cautious_decay = group["cautious_decay"]
-            adaptive_sigma = group["adaptive_sigma"]
-            sigma_eta = group["sigma_eta"]
-            sigma_omega = group["sigma_omega"]
+            use_internal_lr = group["use_internal_lr"]
+            sigma_gamma = group["sigma_gamma"]
+            sigma_update_interval = group["sigma_update_interval"]
             sigma_min = group["sigma_min"]
             sigma_max = group["sigma_max"]
+            eta_bound = group["eta_bound"]
 
             for p in group["params"]:
                 grad = p.grad
@@ -276,55 +291,64 @@ class SISA(torch.optim.Optimizer):
                     state["step"] = 0
                     state["m"] = torch.zeros_like(p.data)
                     state["pi"] = torch.zeros_like(p.data)
-                    state["prev_w"] = p.data.detach().clone()
+                    state["w_local"] = p.data.detach().clone()
                     state["sigma"] = float(group["sigma_init"])
 
                 state["step"] += 1
+                step = state["step"]
                 m = state["m"]
                 pi = state["pi"]
-                sigma = float(state["sigma"])
+                sigma = _sigma_step_update(
+                    sigma=float(state["sigma"]),
+                    gamma=sigma_gamma,
+                    step=step,
+                    update_interval=sigma_update_interval,
+                    sigma_min=sigma_min,
+                    sigma_max=sigma_max,
+                )
 
                 direction = pi + grad
                 m.mul_(beta).addcmul_(direction, direction, value=1 - beta)
+                if eta_bound is not None and eta_bound > 0:
+                    m.clamp_(max=eta_bound * eta_bound)
                 denom = sigma + rho * torch.sqrt(m) + eps
 
-                if cautious_decay:
-                    CautiousWeightDecay(param=p.data, state=direction, lr=lr, wd=wd)
-                elif wd > 0:
-                    p.data.mul_(1 - lr * wd)
+                if not use_internal_lr:
+                    direction = lr * direction
 
-                old_w = p.data.detach().clone()
-                p.data.addcdiv_(direction, denom, value=-lr)
-                step_delta = p.data - old_w
-                pi.add_(step_delta, alpha=sigma)
-
-                if adaptive_sigma:
-                    prev_w = state["prev_w"]
-                    primal_residual_norm = float(torch.linalg.norm(step_delta))
-                    dual_residual_norm = float(sigma * torch.linalg.norm(old_w - prev_w))
-                    sigma = _adapt_penalty(
-                        sigma=sigma,
-                        primal_residual_norm=primal_residual_norm,
-                        dual_residual_norm=dual_residual_norm,
-                        eta=sigma_eta,
-                        omega=sigma_omega,
-                        sigma_min=sigma_min,
-                        sigma_max=sigma_max,
+                w_global = p.data
+                w_local_new = w_global - direction / denom
+                if cautious_decay and lambda_reg > 0:
+                    CautiousWeightDecay(
+                        param=w_local_new,
+                        state=direction,
+                        lr=1.0,
+                        wd=lambda_reg,
                     )
-                    state["sigma"] = sigma
+                pi.add_(w_local_new - w_global, alpha=sigma)
+                p.data.copy_(
+                    _admm_global_update(
+                        w_local=w_local_new,
+                        pi=pi,
+                        sigma=sigma,
+                        lambda_reg=lambda_reg,
+                        eps=eps,
+                    )
+                )
 
-                state["prev_w"].copy_(old_w)
+                state["w_local"].copy_(w_local_new)
+                state["sigma"] = sigma
 
         return loss
 
 
 class NSISA(torch.optim.Optimizer):
     """
-    Single-model adaptation of NSISA (arXiv:2502.10784, Alg. 3).
+    Single-client approximation of NSISA (Alg. 3).
 
-    Differences from SISA:
-    - Replace raw gradients with Newton-Schulz transformed momentum state.
-    - Add epsilon^t perturbation on zero entries for numerical safety.
+    Differences vs SISA:
+    - Newton-Schulz transformed momentum state O_t replaces raw gradient.
+    - epsilon^t mask perturbation on zero entries.
     """
 
     def __init__(
@@ -334,12 +358,12 @@ class NSISA(torch.optim.Optimizer):
         beta: float = 0.9,
         momentum: float = 0.95,
         rho: float = 1.0,
-        sigma_init: float = 1.0,
-        sigma_eta: float = 0.1,
-        sigma_omega: float = 10.0,
+        sigma_init: float = 0.01,
+        sigma_gamma: float = 1.0,
+        sigma_update_interval: int = 1,
         sigma_min: float = 1e-6,
         sigma_max: float = 1e6,
-        adaptive_sigma: bool = True,
+        eta_bound: float | None = None,
         a: float = 3.4445,
         b: float = -4.7750,
         c: float = 2.0315,
@@ -347,6 +371,7 @@ class NSISA(torch.optim.Optimizer):
         eps: float = 1e-8,
         weight_decay: float = 0.0,
         cautious_decay: bool = False,
+        use_internal_lr: bool = True,
     ):
         defaults = {
             "lr": lr,
@@ -354,11 +379,11 @@ class NSISA(torch.optim.Optimizer):
             "momentum": momentum,
             "rho": rho,
             "sigma_init": sigma_init,
-            "sigma_eta": sigma_eta,
-            "sigma_omega": sigma_omega,
+            "sigma_gamma": sigma_gamma,
+            "sigma_update_interval": sigma_update_interval,
             "sigma_min": sigma_min,
             "sigma_max": sigma_max,
-            "adaptive_sigma": adaptive_sigma,
+            "eta_bound": eta_bound,
             "a": a,
             "b": b,
             "c": c,
@@ -366,6 +391,7 @@ class NSISA(torch.optim.Optimizer):
             "eps": eps,
             "weight_decay": weight_decay,
             "cautious_decay": cautious_decay,
+            "use_internal_lr": use_internal_lr,
         }
         super().__init__(params, defaults)
 
@@ -394,13 +420,14 @@ class NSISA(torch.optim.Optimizer):
             momentum = group["momentum"]
             rho = group["rho"]
             eps = group["eps"]
-            wd = group["weight_decay"]
+            lambda_reg = group["weight_decay"]
             cautious_decay = group["cautious_decay"]
-            adaptive_sigma = group["adaptive_sigma"]
-            sigma_eta = group["sigma_eta"]
-            sigma_omega = group["sigma_omega"]
+            use_internal_lr = group["use_internal_lr"]
+            sigma_gamma = group["sigma_gamma"]
+            sigma_update_interval = group["sigma_update_interval"]
             sigma_min = group["sigma_min"]
             sigma_max = group["sigma_max"]
+            eta_bound = group["eta_bound"]
             a = group["a"]
             b = group["b"]
             c = group["c"]
@@ -417,15 +444,22 @@ class NSISA(torch.optim.Optimizer):
                     state["m"] = torch.zeros_like(p.data)
                     state["b"] = torch.zeros_like(p.data)
                     state["pi"] = torch.zeros_like(p.data)
-                    state["prev_w"] = p.data.detach().clone()
+                    state["w_local"] = p.data.detach().clone()
                     state["sigma"] = float(group["sigma_init"])
 
                 state["step"] += 1
-                t = state["step"]
+                step = state["step"]
                 m = state["m"]
                 b_buffer = state["b"]
                 pi = state["pi"]
-                sigma = float(state["sigma"])
+                sigma = _sigma_step_update(
+                    sigma=float(state["sigma"]),
+                    gamma=sigma_gamma,
+                    step=step,
+                    update_interval=sigma_update_interval,
+                    sigma_min=sigma_min,
+                    sigma_max=sigma_max,
+                )
 
                 b_buffer.mul_(momentum).add_(grad)
 
@@ -444,42 +478,44 @@ class NSISA(torch.optim.Optimizer):
 
                 direction = pi + o
                 m.mul_(beta).addcmul_(direction, direction, value=1 - beta)
+                if eta_bound is not None and eta_bound > 0:
+                    m.clamp_(max=eta_bound * eta_bound)
                 denom = sigma + rho * torch.sqrt(m) + eps
 
                 if perturb_eps > 0:
                     zero_mask = direction == 0
-                    direction = direction + (perturb_eps**t) * zero_mask.to(dtype=direction.dtype)
+                    direction = direction + (perturb_eps**step) * zero_mask.to(dtype=direction.dtype)
 
-                if cautious_decay:
-                    CautiousWeightDecay(param=p.data, state=direction, lr=lr, wd=wd)
-                elif wd > 0:
-                    p.data.mul_(1 - lr * wd)
+                if not use_internal_lr:
+                    direction = lr * direction
 
-                old_w = p.data.detach().clone()
-                p.data.addcdiv_(direction, denom, value=-lr)
-                step_delta = p.data - old_w
-                pi.add_(step_delta, alpha=sigma)
-
-                if adaptive_sigma:
-                    prev_w = state["prev_w"]
-                    primal_residual_norm = float(torch.linalg.norm(step_delta))
-                    dual_residual_norm = float(sigma * torch.linalg.norm(old_w - prev_w))
-                    sigma = _adapt_penalty(
-                        sigma=sigma,
-                        primal_residual_norm=primal_residual_norm,
-                        dual_residual_norm=dual_residual_norm,
-                        eta=sigma_eta,
-                        omega=sigma_omega,
-                        sigma_min=sigma_min,
-                        sigma_max=sigma_max,
+                w_global = p.data
+                w_local_new = w_global - direction / denom
+                if cautious_decay and lambda_reg > 0:
+                    CautiousWeightDecay(
+                        param=w_local_new,
+                        state=direction,
+                        lr=1.0,
+                        wd=lambda_reg,
                     )
-                    state["sigma"] = sigma
+                pi.add_(w_local_new - w_global, alpha=sigma)
+                p.data.copy_(
+                    _admm_global_update(
+                        w_local=w_local_new,
+                        pi=pi,
+                        sigma=sigma,
+                        lambda_reg=lambda_reg,
+                        eps=eps,
+                    )
+                )
 
-                state["prev_w"].copy_(old_w)
+                state["w_local"].copy_(w_local_new)
+                state["sigma"] = sigma
 
         return loss
 
 
+# Gradient clipping utility
 def gradient_clipping(params: Iterable[torch.nn.Parameter], M: float, eps: float = 1e-6,):
     # l2_norm = torch.norm(params)
     grads = [p.grad for p in params if p.grad is not None]
