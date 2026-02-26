@@ -371,10 +371,10 @@ class multihead_self_attention(nn.Module):
         lead_dim = Q_head.ndim - 3
         tau = torch.exp(self.log_tau).view((*([1] * lead_dim), self.num_heads, 1, 1)) 
 
+        Q_head, K_head = QK_Norm(Q = Q_head, K = K_head)
         if rope is not None and token_positions is not None:
             Q_head:Float[Tensor, "... num_heads seq_len d_k"]= rope(Q_head, token_positions) 
             K_head:Float[Tensor, "... num_heads seq_len d_k"] = rope(K_head, token_positions)
-        Q_head, K_head = QK_Norm(Q = Q_head, K = K_head)
 
         heads: Float[Tensor, "... num_heads seq_len d_k"] = self.sdpa(Q_head, K_head, V_head, seq_len=seq_len, tau=tau)
         context: Float[Tensor, "... seq_len d_model"] = heads.movedim(-3,-2).reshape(*x.shape[:-1], self.num_heads * self.d_k)
