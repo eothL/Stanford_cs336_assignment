@@ -238,6 +238,13 @@ def parse_args():
     parser.add_argument("--use-bias", action="store_true")
     parser.add_argument("--use-qk-norm", action="store_true")
     parser.add_argument("--use-x0-mixing", action="store_true")
+    parser.add_argument("--num-value-embeddings", type=int, default=0)
+    parser.add_argument(
+        "--value-embedding-pattern",
+        type=str,
+        choices=["cycle", "first_last"],
+        default="cycle",
+    )
     parser.add_argument("--activation-fcn", type=str, default="swiglu", help="Choose your activation function used in FFN in lowercase")
 
     parser.add_argument("--config", type= str, default= None)
@@ -266,6 +273,8 @@ def auto_run_name(args):
           "act_fcn": args.activation_fcn,
           "optimizer_mode": args.optimizer_mode,
           "use_x0_mixing": args.use_x0_mixing,
+          "num_value_embeddings": args.num_value_embeddings,
+          "value_embedding_pattern": args.value_embedding_pattern,
       }
     
     slug = f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}-bs{cfg['bs']}-lr{cfg['lrmax']}-m_norm{cfg['m_norm']}"        
@@ -275,6 +284,8 @@ def auto_run_name(args):
     slug += f"-{args.optimizer_mode}"
     if args.use_x0_mixing:
         slug += "-x0mix"
+    if args.num_value_embeddings > 0:
+        slug += f"-mve{args.num_value_embeddings}-{args.value_embedding_pattern}"
 
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
@@ -427,8 +438,6 @@ def train():
 
     if args.use_qk_norm is True:
         run_name= "_".join([run_name, "qknorm"])
-    if args.use_x0_mixing is True:
-        run_name = "_".join([run_name, "x0mix"])
 
     # file 
     artifacts_folder = "artifacts"
@@ -468,6 +477,8 @@ def train():
         "use_qk_norm" : args.use_qk_norm,
         "activation_fcn": args.activation_fcn,
         "use_x0_mixing": args.use_x0_mixing,
+        "num_value_embeddings": args.num_value_embeddings,
+        "value_embedding_pattern": args.value_embedding_pattern,
         }
 
     if args.seed:

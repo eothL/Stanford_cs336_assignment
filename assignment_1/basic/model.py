@@ -334,11 +334,21 @@ def QK_Norm(Q:torch.Tensor, K:torch.Tensor, eps = 1e-5):
     
 
 class multihead_self_attention(nn.Module):
-    def __init__(self, d_model: int,  num_heads:int, max_seq_len: int,bias:bool = False, device: torch.device | None = None, use_qk_norm: bool= False):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        max_seq_len: int,
+        bias: bool = False,
+        device: torch.device | None = None,
+        use_qk_norm: bool = False,
+        use_value_embeddings: bool = False,
+    ):
         super().__init__()
         assert d_model % num_heads == 0
         self.d_k = self.d_v= d_model // num_heads
         self.device = device
+        self.use_value_embeddings = use_value_embeddings
         self.q_proj = Linear(d_model, d_model, bias=bias,device=device)
         self.k_proj = Linear(d_model, d_model, bias=bias, device=device)
         self.v_proj = Linear(d_model, d_model, bias=bias, device=device)
@@ -346,21 +356,52 @@ class multihead_self_attention(nn.Module):
         self.num_heads = num_heads
         self.use_qk_norm = use_qk_norm
         self.log_tau = nn.Parameter(torch.zeros(num_heads)) if use_qk_norm is True else None
+        if self.use_value_embeddings:
+            self.value_mix = nn.Parameter(torch.tensor([1.0, 0.0], device=device))
         # if we don't want a learned tau and fixed one, we can use use register_buffer
 
         self.sdpa = scaled_dot_product_attention(max_seq_len=max_seq_len, device=device)
         self._forward_impl = self._forward_qk_norm if use_qk_norm is True else self._forward_vanilla
     
-    def forward(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
-        return self._forward_impl(x=x, token_positions=token_positions, rope=rope)
+    def forward(
+        self,
+        x: Float[Tensor, " ... seq_len d_in"],
+        token_positions: Int[Tensor, "... seq_len"] | None = None,
+        rope=None,
+        value_embed: Float[Tensor, "... seq_len d_model"] | None = None,
+    ) -> Float[Tensor, "... seq_len d_out"]:
+        return self._forward_impl(
+            x=x,
+            token_positions=token_positions,
+            rope=rope,
+            value_embed=value_embed,
+        )
+
+    def _mix_values(
+        self,
+        values: Float[Tensor, "... seq_len d_model"],
+        value_embed: Float[Tensor, "... seq_len d_model"] | None,
+    ) -> Float[Tensor, "... seq_len d_model"]:
+        if not self.use_value_embeddings:
+            return values
+        if value_embed is None:
+            return self.value_mix[0] * values
+        return self.value_mix[0] * values + self.value_mix[1] * value_embed
     
-    def _forward_qk_norm(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
+    def _forward_qk_norm(
+        self,
+        x: Float[Tensor, " ... seq_len d_in"],
+        token_positions: Int[Tensor, "... seq_len"] | None = None,
+        rope=None,
+        value_embed: Float[Tensor, "... seq_len d_model"] | None = None,
+    ) -> Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
 
         # d_k = d_model//num_heads        
         Q:Float[Tensor, "... seq_len d_model"] = self.q_proj(x)
         K:Float[Tensor, "... seq_len d_model"] = self.k_proj(x)
         V:Float[Tensor, "... seq_len d_model"] = self.v_proj(x)
+        V = self._mix_values(V, value_embed)
 
         head_shape = torch.Size((*Q.shape[:-1], self.num_heads, self.d_k)) # ... seq_len H d_k
         # reshaping to split into N head and swap seq_len and num_heads
@@ -380,13 +421,20 @@ class multihead_self_attention(nn.Module):
         context: Float[Tensor, "... seq_len d_model"] = heads.movedim(-3,-2).reshape(*x.shape[:-1], self.num_heads * self.d_k)
         return self.o_proj(context)    
     
-    def _forward_vanilla(self, x: Float[Tensor, " ... seq_len d_in"], token_positions: Int[Tensor, "... seq_len"] | None = None, rope=None,)->Float[Tensor, "... seq_len d_out"]:
+    def _forward_vanilla(
+        self,
+        x: Float[Tensor, " ... seq_len d_in"],
+        token_positions: Int[Tensor, "... seq_len"] | None = None,
+        rope=None,
+        value_embed: Float[Tensor, "... seq_len d_model"] | None = None,
+    ) -> Float[Tensor, "... seq_len d_out"]:
         seq_len = x.shape[-2]
 
         # d_k = d_model//num_heads        
         Q:Float[Tensor, "... seq_len d_model"] = self.q_proj(x)
         K:Float[Tensor, "... seq_len d_model"] = self.k_proj(x)
         V:Float[Tensor, "... seq_len d_model"] = self.v_proj(x)
+        V = self._mix_values(V, value_embed)
 
         head_shape = torch.Size((*Q.shape[:-1], self.num_heads, self.d_k)) # ... seq_len H d_k
         # reshaping to split into N head and swap seq_len and num_heads
@@ -468,6 +516,7 @@ class transformer_block(nn.Module):
                 use_qk_norm: bool = False,
                 activation_fcn:str = "swiglu",
                 use_x0_mixing: bool = False,
+                use_value_embeddings: bool = False,
                 ):
         super().__init__()
         self.device = device
@@ -483,7 +532,15 @@ class transformer_block(nn.Module):
         if self.use_x0_mixing:
             self.x0_mix = nn.Parameter(torch.tensor([1.0, 0.0], device=device))
 
-        self.MHA_layer = multihead_self_attention(d_model, num_heads, max_seq_len, bias = bias, device = device, use_qk_norm=use_qk_norm)
+        self.MHA_layer = multihead_self_attention(
+            d_model,
+            num_heads,
+            max_seq_len,
+            bias=bias,
+            device=device,
+            use_qk_norm=use_qk_norm,
+            use_value_embeddings=use_value_embeddings,
+        )
         self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, activation_fcn=activation_fcn,bias = bias, device = device)
 
         self._forward_impl = self._forward_post if use_post_norm else self._forward_pre 
@@ -493,12 +550,13 @@ class transformer_block(nn.Module):
         x: Float[Tensor, "... sequence_length d_model"],
         token_positions=None,
         x0: Float[Tensor, "... sequence_length d_model"] | None = None,
+        value_embed: Float[Tensor, "... sequence_length d_model"] | None = None,
     ) -> Float[Tensor, "... sequence_length d_model"]:
         if token_positions is None:
             seq_len = x.shape[-2]
             token_positions = torch.arange(seq_len, device=x.device, dtype=torch.long)
 
-        return self._forward_impl(x, token_positions, x0)
+        return self._forward_impl(x, token_positions, x0, value_embed)
 
     def _mix_with_x0(
         self,
@@ -511,15 +569,25 @@ class transformer_block(nn.Module):
             raise ValueError("x0 must be provided when use_x0_mixing=True")
         return self.x0_mix[0] * x + self.x0_mix[1] * x0
 
-    def _forward_pre(self, x, token_positions, x0=None):
+    def _forward_pre(self, x, token_positions, x0=None, value_embed=None):
         attn_input = self._mix_with_x0(x, x0)
-        attn_out = self.MHA_layer(self.rmsnorm1(attn_input), token_positions = token_positions, rope = self.rope)
+        attn_out = self.MHA_layer(
+            self.rmsnorm1(attn_input),
+            token_positions=token_positions,
+            rope=self.rope,
+            value_embed=value_embed,
+        )
         h = x + attn_out
         return h + self.FFN(self.rmsnorm2(h))
 
-    def _forward_post(self, x, token_positions, x0=None):
+    def _forward_post(self, x, token_positions, x0=None, value_embed=None):
         attn_input = self._mix_with_x0(x, x0)
-        attn_out = self.MHA_layer(attn_input, token_positions = token_positions, rope = self.rope)
+        attn_out = self.MHA_layer(
+            attn_input,
+            token_positions=token_positions,
+            rope=self.rope,
+            value_embed=value_embed,
+        )
         h_norm = self.rmsnorm1(x + attn_out)
         return self.rmsnorm2(h_norm + self.FFN(h_norm))
 
@@ -544,12 +612,21 @@ class TransformerLM(nn.Module):
                 bias:bool, 
                 activation_fcn:str = "swiglu",
                 use_x0_mixing: bool = False,
+                num_value_embeddings: int = 0,
+                value_embedding_pattern: str = "cycle",
                 tied_embedding:bool=False,
                 device:torch.device | None = None,
                 ):
         super().__init__()
         self.context_length = context_length
+        self.num_layers = num_layers
+        self.num_value_embeddings = num_value_embeddings
+        self.value_embedding_pattern = value_embedding_pattern
         self.embedding = Embedding(num_embeddings= vocab_size, embedding_dim=d_model, device=device, dtype=torch.float32)
+        self.value_embeddings = nn.ModuleList(
+            [Embedding(num_embeddings=vocab_size, embedding_dim=d_model, device=device, dtype=torch.float32) for _ in range(num_value_embeddings)]
+        )
+        self.value_embedding_plan = self._build_value_embedding_plan()
         self.transformer_blocks = nn.ModuleList(
             [transformer_block(
                 d_model = d_model,
@@ -565,6 +642,7 @@ class TransformerLM(nn.Module):
                 use_qk_norm=use_qk_norm,
                 activation_fcn=activation_fcn,
                 use_x0_mixing=use_x0_mixing,
+                use_value_embeddings=num_value_embeddings > 0,
                 ) for _ in range(num_layers)])
         
         self.lm_head = Linear(in_features=d_model, out_features=vocab_size, device= device, bias=bias)
@@ -575,12 +653,42 @@ class TransformerLM(nn.Module):
             RMSNorm(d_model=d_model, device=device),
             self.lm_head
         )
+
+    def _build_value_embedding_plan(self) -> list[int | None]:
+        if self.num_value_embeddings <= 0:
+            return [None] * self.num_layers
+
+        pattern = self.value_embedding_pattern.lower()
+        if pattern == "cycle":
+            return [layer_idx % self.num_value_embeddings for layer_idx in range(self.num_layers)]
+
+        if pattern == "first_last":
+            if 2 * self.num_value_embeddings > self.num_layers:
+                raise ValueError(
+                    "first_last value embedding pattern requires "
+                    "2 * num_value_embeddings <= num_layers"
+                )
+            middle_len = self.num_layers - 2 * self.num_value_embeddings
+            return (
+                list(range(self.num_value_embeddings))
+                + [None] * middle_len
+                + list(range(self.num_value_embeddings))
+            )
+
+        raise ValueError(f"Unsupported value_embedding_pattern: {self.value_embedding_pattern}")
     
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+        value_embed_inputs = [None] * self.num_layers
+        if self.num_value_embeddings > 0:
+            embedded_values = [value_embedding(x) for value_embedding in self.value_embeddings]
+            value_embed_inputs = [
+                None if plan_idx is None else embedded_values[plan_idx]
+                for plan_idx in self.value_embedding_plan
+            ]
 
         h = x0 = self.embedding(x)
-        for block in self.transformer_blocks:
-            h = block(h, token_positions=token_positions, x0=x0)
+        for block, value_embed in zip(self.transformer_blocks, value_embed_inputs):
+            h = block(h, token_positions=token_positions, x0=x0, value_embed=value_embed)
         logits = self.head(h)
         return logits
 
