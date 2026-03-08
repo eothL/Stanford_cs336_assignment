@@ -237,6 +237,7 @@ def parse_args():
     parser.add_argument("--remove-rmsnorm", action="store_true")
     parser.add_argument("--use-bias", action="store_true")
     parser.add_argument("--use-qk-norm", action="store_true")
+    parser.add_argument("--use-x0-mixing", action="store_true")
     parser.add_argument("--activation-fcn", type=str, default="swiglu", help="Choose your activation function used in FFN in lowercase")
 
     parser.add_argument("--config", type= str, default= None)
@@ -264,6 +265,7 @@ def auto_run_name(args):
           "dataset": args.train_dataset,
           "act_fcn": args.activation_fcn,
           "optimizer_mode": args.optimizer_mode,
+          "use_x0_mixing": args.use_x0_mixing,
       }
     
     slug = f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}-bs{cfg['bs']}-lr{cfg['lrmax']}-m_norm{cfg['m_norm']}"        
@@ -271,6 +273,8 @@ def auto_run_name(args):
     slug += f"-b1{cfg['beta1']}-b2{cfg['beta2']}"
     slug += f"-{cfg['act_fcn']}"
     slug += f"-{args.optimizer_mode}"
+    if args.use_x0_mixing:
+        slug += "-x0mix"
 
     h = hashlib.sha1(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:8]
     return f"{slug}-{h}"
@@ -423,6 +427,8 @@ def train():
 
     if args.use_qk_norm is True:
         run_name= "_".join([run_name, "qknorm"])
+    if args.use_x0_mixing is True:
+        run_name = "_".join([run_name, "x0mix"])
 
     # file 
     artifacts_folder = "artifacts"
@@ -460,7 +466,8 @@ def train():
         "remove_rmsnorm" : args.remove_rmsnorm,
         "use_post_norm" : args.use_post_norm,
         "use_qk_norm" : args.use_qk_norm,
-        "activation_fcn": args.activation_fcn
+        "activation_fcn": args.activation_fcn,
+        "use_x0_mixing": args.use_x0_mixing,
         }
 
     if args.seed:
