@@ -279,7 +279,7 @@ def auto_run_name(args):
     
     slug = f"L{cfg['L']}-H{cfg['H']}-D{cfg['D']}-ctx{cfg['ctx']}-bs{cfg['bs']}-lr{cfg['lrmax']}-m_norm{cfg['m_norm']}"        
     slug += f"-c_wd{cfg['wd']}" if args.cautious_decay is True else f"-wd{cfg['wd']}"
-    slug += f"-b1{cfg['beta1']}-b2{cfg['beta2']}"
+    slug += f"-bts{cfg['beta1']}-{cfg['beta2']}"
     slug += f"-{cfg['act_fcn']}"
     slug += f"-{args.optimizer_mode}"
     if args.use_x0_mixing:
