@@ -19,6 +19,15 @@ def load_tokens(path, use_memmap:bool):
         return np.memmap(path, dtype=np.uint16, mode="r")
     return np.fromfile(path, dtype=np.uint16)
 
+
+def global_grad_norm(parameters: typing.Iterable[torch.nn.Parameter]) -> float | None:
+    grads = [p.grad.detach() for p in parameters if p.grad is not None]
+    if not grads:
+        return None
+    with torch.no_grad():
+        total_sq = sum(torch.sum(g.float() * g.float()) for g in grads)
+        return float(torch.sqrt(total_sq).item())
+
 def data_loading(x: Int[npt.NDArray, "..."], batch_size: int, context_length: int, device: str = "cpu") -> tuple[Int[Tensor, "batch_size seq_len"], Int[Tensor, "batch_size seq_len"]]:
     """load fully dataset to train it"""
     x_t = torch.as_tensor(x, dtype = torch.long, device=device)
@@ -112,6 +121,7 @@ def run_epoch(
     
     total_loss = 0.0
     total_sample = 0
+    grad_norm = None
     with context:
         x, y = loader()
         logits: Float[Tensor, "batch_size seq_len vocab_size"] = LM(x)
@@ -132,6 +142,7 @@ def run_epoch(
                     g["lr"] = scaled_lr
 
             loss.backward()
+            grad_norm = global_grad_norm(LM.parameters())
             optimizer.gradient_clipping(LM.parameters(), M = max_norm)
             
             for opt in optimizers.values():
@@ -143,7 +154,7 @@ def run_epoch(
         total_sample += batch_size
 
     avg_loss = total_loss / total_sample
-    return avg_loss
+    return avg_loss, grad_norm
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -533,7 +544,7 @@ def train():
             ramp_alpha = scheduler.ramp_relu_alpha(t=epoch, Tw=warmup, Tc=cosine_cycle)
             LM.set_ramp_alpha(ramp_alpha)
 
-        train_loss = run_epoch(
+        train_loss, grad_norm = run_epoch(
             LM=LM_compil,
             loader=train_loader,
             loss_fcn=loss_fcn,
@@ -544,7 +555,7 @@ def train():
             device=device,
             training=True,
         )
-        val_loss = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizers=None, device = device, training = False)
+        val_loss, _ = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizers=None, device = device, training = False)
         total_token_processed += batch_size * context_length
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss, "total_token_processed": total_token_processed})
         
@@ -556,6 +567,8 @@ def train():
                 "lr": lr,
                 "epoch_time": epoch_time
             }
+        if grad_norm is not None:
+            metrics["grad_norm"] = grad_norm
         if ramp_alpha is not None:
             metrics["ramp_alpha"] = ramp_alpha
         for opt_name, opt in optimizer_bundle.items():
