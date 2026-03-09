@@ -451,6 +451,9 @@ def train():
 
     if args.use_qk_norm is True:
         run_name= "_".join([run_name, "qknorm"])
+    
+    if z_loss_coeff > 0:
+        run_name="_".join([run_name,f"z_loss-{z_loss_coeff}"])
 
     # file 
     artifacts_folder = "artifacts"
