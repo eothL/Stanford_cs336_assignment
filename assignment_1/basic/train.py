@@ -111,6 +111,7 @@ def run_epoch(
         lr_scales: dict[str, float] | None = None,
         device: torch.device | None = None,
         training = True,
+        z_loss_coeff:float = 0.0
 ):
     if training :
         LM.train()
@@ -126,7 +127,7 @@ def run_epoch(
         x, y = loader()
         logits: Float[Tensor, "batch_size seq_len vocab_size"] = LM(x)
         # flatten matrices with view(-1) and reshape into vocab_size for x
-        loss = loss_fcn(predicted_logits= logits.view(-1, logits.size(-1)), targets= y.view(-1))
+        loss = loss_fcn(predicted_logits= logits.view(-1, logits.size(-1)), targets= y.view(-1), z_loss_coeff=z_loss_coeff)
 
         if training:
             if optimizers is None:
@@ -257,7 +258,7 @@ def parse_args():
         default="cycle",
     )
     parser.add_argument("--activation-fcn", type=str, default="swiglu", help="Choose your activation function used in FFN in lowercase")
-
+    parser.add_argument("--z-loss-coeff", type=float, default=0.0, help="Choose value for z-loss coefficient, 0 = disable it") # usually 1e-4 is value used
     parser.add_argument("--config", type= str, default= None)
     # read yaml config 
     pre_args, _ = parser.parse_known_args()
@@ -419,6 +420,7 @@ def train():
     max_time = args.max_time # min
     max_time_seconds = float("inf") if max_time <= 0 else 60*max_time # no time limits if it is negative or 0 
     adamw_lr_scale = args.adamw_lr_scale
+    z_loss_coeff = args.z_loss_coeff
     if adamw_lr_scale is None:
         adamw_lr_scale = 0.1 if args.optimizer_mode == "muon_adamw" else 1.0
 
@@ -554,6 +556,7 @@ def train():
             lr_scales=lr_scales,
             device=device,
             training=True,
+            z_loss_coeff=z_loss_coeff
         )
         val_loss, _ = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizers=None, device = device, training = False)
         total_token_processed += batch_size * context_length
