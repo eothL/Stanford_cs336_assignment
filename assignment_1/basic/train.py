@@ -540,7 +540,7 @@ def train():
     start = time.time()
     accum_time = 0
     epoch = 0
-    while epoch < epochs and accum_time < max_time_seconds :
+    while epoch < epochs or accum_time < max_time_seconds :
         epoch_start = time.time()
         # forward
         lr = scheduler.learning_rate_schedule(t = epoch, lr_min = lr_min, lr_max = lr_max, Tw = warmup, Tc = cosine_cycle)
