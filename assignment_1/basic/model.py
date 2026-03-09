@@ -143,7 +143,7 @@ class positionwise_feedforward(nn.Module):
             self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
             self.register_buffer(
                 "ramp_alpha",
-                torch.tensor(0.0, dtype=torch.float32, device=device),
+                torch.tensor(0.0, dtype=dtype, device=device),
                 persistent=False,
             )
             self._forward_impl = self._forward_ramp_relu
@@ -271,12 +271,11 @@ class RoPE(nn.Module):
         x_even: Float[Tensor, "... seq_len d_k_half"] = x[..., 0::2]
         x_odd: Float[Tensor, "... seq_len d_k_half"]  = x[..., 1::2]
 
-        out: Float[Tensor, "... seq_len d_k"] = torch.empty_like(x)
-        out[..., 0::2] = x_even * cos - x_odd * sin
-        out[..., 1::2] = x_even * sin + x_odd * cos
-        return out # (... seq_len d_k)
+        rot_even = x_even * cos - x_odd * sin
+        rot_odd = x_even * sin + x_odd * cos
+        return torch.stack([rot_even, rot_odd], dim=-1).reshape(x.shape) # shape (..., seq_len, d_k)
 
-#@ Activation function
+# Activation function
 class Softmax(nn.Module):
     """
     Args:
