@@ -644,13 +644,6 @@ class TransformerLM(nn.Module):
                 use_value_embeddings=num_value_embeddings > 0,
                 ) for _ in range(num_layers)])
 
-        # Scale output projections by 1/sqrt(2*num_layers) to control residual stream growth (GPT-2 paper).
-        scale_factor = 1/math.sqrt(2*num_layers)
-        with torch.no_grad():
-            for block in self.transformer_blocks:
-                block.MHA_layer.o_proj.weight.data *= scale_factor
-                block.FFN.w2_proj.weight.data *= scale_factor
-
         self.lm_head = Linear(in_features=d_model, out_features=vocab_size, device= device, bias=bias)
         if tied_embedding is True:
             self.lm_head.weight =self.embedding.weight
