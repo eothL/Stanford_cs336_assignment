@@ -258,6 +258,7 @@ def parse_args():
         default="cycle",
     )
     parser.add_argument("--activation-fcn", type=str, default="swiglu", help="Choose your activation function used in FFN in lowercase")
+    parser.add_argument("--noble-rank", type=int, default=0, help="NOBLE nonlinear low-rank branch rank per FFN linear layer (0 = disabled)")
     parser.add_argument("--z-loss-coeff", type=float, default=0.0, help="Choose value for z-loss coefficient, 0 = disable it") # usually 1e-4 is value used
     parser.add_argument("--config", type= str, default= None)
     # read yaml config 
@@ -495,6 +496,7 @@ def train():
         "use_x0_mixing": args.use_x0_mixing,
         "num_value_embeddings": args.num_value_embeddings,
         "value_embedding_pattern": args.value_embedding_pattern,
+        "noble_rank": args.noble_rank,
         }
 
     if args.seed:

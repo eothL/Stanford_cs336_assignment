@@ -78,6 +78,53 @@ class Embedding(nn.Module):
     def forward(self, token_ids: Int[Tensor, "..."]) -> torch.Tensor:
         return self.weight[token_ids]
 
+class NOBLELinear(nn.Module):
+    """Linear layer with a NOBLE nonlinear low-rank branch (arxiv 2603.06492).
+
+    Adds σ(x W_down) W_up to the base linear output, where
+    σ(z) = a · cos(π(z + b) / 2)  (CosNet, with scalar learnable a and b).
+
+    W_up is zero-initialized so the branch is silent at step 0.
+    Default rank = d_model // 64 (e.g. 12 for d_model=768).
+    """
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        rank: int,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+        bias: bool = False,
+    ):
+        super().__init__()
+        self.base = Linear(in_features, out_features, device=device, dtype=dtype, bias=bias)
+        kw: dict = {}
+        if device is not None: kw["device"] = device
+        if dtype is not None:  kw["dtype"]  = dtype
+        self.W_down = nn.Parameter(torch.empty(in_features, rank, **kw))
+        self.W_up   = nn.Parameter(torch.zeros(rank, out_features, **kw))  # zero-init: branch silent at step 0
+        self.a      = nn.Parameter(torch.ones(1, **kw))   # CosNet amplitude (scalar)
+        self.b      = nn.Parameter(torch.zeros(1, **kw))  # CosNet phase    (scalar)
+        _init_trunc_normal(self.W_down)
+
+    @property
+    def weight(self):
+        return self.base.weight
+
+    def forward(self, x: Float[Tensor, "... in_features"]) -> Float[Tensor, "... out_features"]:
+        # TODO(human): implement the NOBLE forward pass (~4 lines)
+        # Steps:
+        #   1. base output:  self.base(x)                           → (..., out_features)
+        #   2. project down: x @ self.W_down                        → (..., rank)
+        #   3. CosNet:       self.a * cos(π * (z + self.b) / 2)    → (..., rank)
+        #   4. project up:   branch_act @ self.W_up                 → (..., out_features)
+        #   5. return base + branch
+        out_base = self.base(x)
+        down_proj = x @ self.W_down
+        branch_act = self.a * torch.cos(torch.pi * (down_proj + self.b) / 2)
+        up_proj = branch_act @ self.W_up
+        return out_base + up_proj
+
 ## Normalizer
 def rms_normalize(input:torch.Tensor, eps:float=1e-5):
     # prevent overflow when applying square to input convert input to float 32
@@ -114,7 +161,7 @@ class RMSNorm(nn.Module):
     
 
 class positionwise_feedforward(nn.Module):
-    def __init__(self, d_model: int, d_ff: int | None = None, activation_fcn: str = "swiglu", device= None, dtype = None, bias = False):
+    def __init__(self, d_model: int, d_ff: int | None = None, activation_fcn: str = "swiglu", device= None, dtype = None, bias = False, noble_rank: int = 0):
         super().__init__()
         self.factory_kwargs = {}
         if device is not None:
@@ -125,22 +172,28 @@ class positionwise_feedforward(nn.Module):
         self.d_model = d_model
         self.d_ff = d_ff if d_ff is not None else int(((8/3 * d_model)//64)*64) # keep a multiple of 64 to make a good use of the hardware
         self.activation_fcn = activation_fcn.lower()
+
+        def _lin(in_f: int, out_f: int):
+            if noble_rank > 0:
+                return NOBLELinear(in_f, out_f, rank=noble_rank, **self.factory_kwargs, bias=bias)
+            return Linear(in_f, out_f, **self.factory_kwargs, bias=bias)
+
         if self.activation_fcn == "swiglu":
-            self.w1_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs, bias=bias)
-            self.w3_proj = Linear(self.d_model, self.d_ff,  **self.factory_kwargs, bias=bias)
-            self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
+            self.w1_proj = _lin(self.d_model, self.d_ff)
+            self.w3_proj = _lin(self.d_model, self.d_ff)
+            self.w2_proj = _lin(self.d_ff, self.d_model)
             self._forward_impl = self._forward_swiglu
         elif self.activation_fcn == "relu":
-            self.w1_proj = Linear(self.d_model, self.d_ff, **self.factory_kwargs, bias=bias)
-            self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
+            self.w1_proj = _lin(self.d_model, self.d_ff)
+            self.w2_proj = _lin(self.d_ff, self.d_model)
             self._forward_impl = self._forward_relu
         elif self.activation_fcn == "sq_relu":
-            self.w1_proj = Linear(self.d_model, self.d_ff, **self.factory_kwargs, bias=bias)
-            self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
+            self.w1_proj = _lin(self.d_model, self.d_ff)
+            self.w2_proj = _lin(self.d_ff, self.d_model)
             self._forward_impl = self._forward_sq_relu
         elif self.activation_fcn == "ramp_relu":
-            self.w1_proj = Linear(self.d_model, self.d_ff, **self.factory_kwargs, bias=bias)
-            self.w2_proj = Linear(self.d_ff, self.d_model,  **self.factory_kwargs, bias=bias)
+            self.w1_proj = _lin(self.d_model, self.d_ff)
+            self.w2_proj = _lin(self.d_ff, self.d_model)
             self.register_buffer(
                 "ramp_alpha",
                 torch.tensor(0.0, dtype=dtype, device=device),
@@ -516,6 +569,7 @@ class transformer_block(nn.Module):
                 activation_fcn:str = "swiglu",
                 use_x0_mixing: bool = False,
                 use_value_embeddings: bool = False,
+                noble_rank: int = 0,
                 ):
         super().__init__()
         self.device = device
@@ -540,7 +594,7 @@ class transformer_block(nn.Module):
             use_qk_norm=use_qk_norm,
             use_value_embeddings=use_value_embeddings,
         )
-        self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, activation_fcn=activation_fcn,bias = bias, device = device)
+        self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, activation_fcn=activation_fcn, bias=bias, device=device, noble_rank=noble_rank)
 
         self._forward_impl = self._forward_post if use_post_norm else self._forward_pre 
 
@@ -614,6 +668,7 @@ class TransformerLM(nn.Module):
                 num_value_embeddings: int = 0,
                 value_embedding_pattern: str = "cycle",
                 tied_embedding:bool=False,
+                noble_rank: int = 0,
                 device:torch.device | None = None,
                 ):
         super().__init__()
@@ -642,6 +697,7 @@ class TransformerLM(nn.Module):
                 activation_fcn=activation_fcn,
                 use_x0_mixing=use_x0_mixing,
                 use_value_embeddings=num_value_embeddings > 0,
+                noble_rank=noble_rank,
                 ) for _ in range(num_layers)])
 
         self.lm_head = Linear(in_features=d_model, out_features=vocab_size, device= device, bias=bias)
