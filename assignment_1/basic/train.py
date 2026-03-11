@@ -456,6 +456,9 @@ def train():
     if z_loss_coeff > 0:
         run_name="_".join([run_name,f"z_loss-{z_loss_coeff}"])
 
+    if args.noble_rank > 0:
+        run_name="_".join([run_name,f"noble-{args.noble_rank}"])
+
     # file 
     artifacts_folder = "artifacts"
     HERE = os.path.dirname(os.path.abspath(__file__))
