@@ -112,13 +112,6 @@ class NOBLELinear(nn.Module):
         return self.base.weight
 
     def forward(self, x: Float[Tensor, "... in_features"]) -> Float[Tensor, "... out_features"]:
-        # TODO(human): implement the NOBLE forward pass (~4 lines)
-        # Steps:
-        #   1. base output:  self.base(x)                           → (..., out_features)
-        #   2. project down: x @ self.W_down                        → (..., rank)
-        #   3. CosNet:       self.a * cos(π * (z + self.b) / 2)    → (..., rank)
-        #   4. project up:   branch_act @ self.W_up                 → (..., out_features)
-        #   5. return base + branch
         out_base = self.base(x)
         down_proj = x @ self.W_down
         branch_act = self.a * torch.cos(torch.pi * (down_proj + self.b) / 2)
