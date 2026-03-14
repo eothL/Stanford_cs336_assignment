@@ -623,7 +623,6 @@ def train():
             optimizers=optimizer_bundle,
             lr=lr,
             lr_scales=lr_scales,
-            device=device,
             training=True,
             z_loss_coeff=z_loss_coeff,
             master=master_weights,
