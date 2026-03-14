@@ -386,6 +386,7 @@ class multihead_self_attention(nn.Module):
         max_seq_len: int,
         bias: bool = False,
         device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
         use_qk_norm: bool = False,
         use_value_embeddings: bool = False,
     ):
@@ -394,10 +395,10 @@ class multihead_self_attention(nn.Module):
         self.d_k = self.d_v= d_model // num_heads
         self.device = device
         self.use_value_embeddings = use_value_embeddings
-        self.q_proj = Linear(d_model, d_model, bias=bias,device=device)
-        self.k_proj = Linear(d_model, d_model, bias=bias, device=device)
-        self.v_proj = Linear(d_model, d_model, bias=bias, device=device)
-        self.o_proj = Linear(d_model, d_model, bias=bias, device=device)
+        self.q_proj = Linear(d_model, d_model, bias=bias, device=device, dtype=dtype)
+        self.k_proj = Linear(d_model, d_model, bias=bias, device=device, dtype=dtype)
+        self.v_proj = Linear(d_model, d_model, bias=bias, device=device, dtype=dtype)
+        self.o_proj = Linear(d_model, d_model, bias=bias, device=device, dtype=dtype)
         self.num_heads = num_heads
         self.use_qk_norm = use_qk_norm
         self.log_tau = nn.Parameter(torch.zeros(num_heads)) if use_qk_norm is True else None
@@ -563,13 +564,14 @@ class transformer_block(nn.Module):
                 use_x0_mixing: bool = False,
                 use_value_embeddings: bool = False,
                 noble_rank: int = 0,
+                dtype: torch.dtype | None = None,
                 ):
         super().__init__()
         self.device = device
         self.use_x0_mixing = use_x0_mixing
         self.rope = None
         if remove_rope is False and theta is not None and max_seq_len is not None:
-            self.rope = RoPE(theta,d_model//num_heads, max_seq_len, device= device) 
+            self.rope = RoPE(theta,d_model//num_heads, max_seq_len, device= device)
 
         Norm = (lambda: nn.Identity()) if remove_rmsnorm else (lambda: RMSNorm(d_model=d_model, device= device))
         self.rmsnorm1 = Norm()
@@ -584,10 +586,11 @@ class transformer_block(nn.Module):
             max_seq_len,
             bias=bias,
             device=device,
+            dtype=dtype,
             use_qk_norm=use_qk_norm,
             use_value_embeddings=use_value_embeddings,
         )
-        self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, activation_fcn=activation_fcn, bias=bias, device=device, noble_rank=noble_rank)
+        self.FFN = positionwise_feedforward(d_model = d_model, d_ff = d_ff, activation_fcn=activation_fcn, bias=bias, device=device, dtype=dtype, noble_rank=noble_rank)
 
         self._forward_impl = self._forward_post if use_post_norm else self._forward_pre 
 

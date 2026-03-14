@@ -259,6 +259,7 @@ def parse_args():
     )
     parser.add_argument("--activation-fcn", type=str, default="swiglu", help="Choose your activation function used in FFN in lowercase")
     parser.add_argument("--noble-rank", type=int, default=0, help="NOBLE nonlinear low-rank branch rank per FFN linear layer (0 = disabled)")
+    parser.add_argument("--compute-dtype", type=str, default="float32", choices=["float32", "bfloat16"], help="Dtype for matmuls and activations (embedding and loss stay float32)")
     parser.add_argument("--z-loss-coeff", type=float, default=0.0, help="Choose value for z-loss coefficient, 0 = disable it") # usually 1e-4 is value used
     parser.add_argument("--config", type= str, default= None)
     # read yaml config 
@@ -459,6 +460,9 @@ def train():
     if args.noble_rank > 0:
         run_name="_".join([run_name,f"noble-{args.noble_rank}"])
 
+    if args.compute_dtype == "bfloat16":
+        run_name = "_".join([run_name, "mx_precision"])
+
     # file 
     artifacts_folder = "artifacts"
     HERE = os.path.dirname(os.path.abspath(__file__))
@@ -508,6 +512,15 @@ def train():
 
     # model initializing
     LM = model.TransformerLM(**model_cfg).to(device)
+
+    # mixed precision: cast compute layers to bfloat16, keep embedding + head in float32
+    compute_dtype = getattr(torch, args.compute_dtype)
+    if compute_dtype != torch.float32:
+        LM.to(compute_dtype)
+        LM.embedding.to(torch.float32)
+        for ve in LM.value_embeddings:
+            ve.to(torch.float32)
+        LM.head.to(torch.float32)
 
     optimizer_bundle, lr_scales = build_optimizer_bundle(
         args=args,
