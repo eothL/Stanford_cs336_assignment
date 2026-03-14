@@ -14,19 +14,48 @@ import time
 from functools import partial
 from . import model, losses, optimizer, scheduler
 
+
+class FP32MasterWeights:
+    """Maintains FP32 copies of BF16 parameters for precise optimizer updates.
+
+    BF16 has ~7 bits of mantissa, so small Adam updates (< 0.008 at magnitude 1.0)
+    get rounded to zero.  This class keeps FP32 "master" copies that the optimizer
+    modifies, then syncs updated values back to the BF16 model params each step.
+    """
+
+    def __init__(self, lm: torch.nn.Module):
+        self._pairs: list[tuple[nn.Parameter, nn.Parameter]] = []  # (bf16_param, fp32_master)
+        self._ptr_to_fp32: dict[int, nn.Parameter] = {}
+        for p in lm.parameters():
+            if p.requires_grad and p.dtype != torch.float32:
+                fp32_p = nn.Parameter(p.data.float(), requires_grad=True)
+                self._pairs.append((p, fp32_p))
+                self._ptr_to_fp32[p.data_ptr()] = fp32_p
+
+    def fp32_of(self, p: nn.Parameter) -> nn.Parameter:
+        """Return the FP32 master if *p* is BF16, otherwise return *p* itself."""
+        return self._ptr_to_fp32.get(p.data_ptr(), p)
+
+    def sync_grads(self):
+        """Copy gradients from BF16 model params → FP32 masters (with upcast)."""
+        for bf16_p, fp32_p in self._pairs:
+            if bf16_p.grad is not None:
+                if fp32_p.grad is None:
+                    fp32_p.grad = bf16_p.grad.float()
+                else:
+                    fp32_p.grad.copy_(bf16_p.grad)  # reuse allocation
+
+    def sync_params(self):
+        """Copy updated FP32 masters → BF16 model params (downcast)."""
+        for bf16_p, fp32_p in self._pairs:
+            bf16_p.data.copy_(fp32_p.data)
+
+
 def load_tokens(path, use_memmap:bool):
     if use_memmap:
         return np.memmap(path, dtype=np.uint16, mode="r")
     return np.fromfile(path, dtype=np.uint16)
 
-
-def global_grad_norm(parameters: typing.Iterable[torch.nn.Parameter]) -> float | None:
-    grads = [p.grad.detach() for p in parameters if p.grad is not None]
-    if not grads:
-        return None
-    with torch.no_grad():
-        total_sq = sum(torch.sum(g.float() * g.float()) for g in grads)
-        return float(torch.sqrt(total_sq).item())
 
 def data_loading(x: Int[npt.NDArray, "..."], batch_size: int, context_length: int, device: str = "cpu") -> tuple[Int[Tensor, "batch_size seq_len"], Int[Tensor, "batch_size seq_len"]]:
     """load fully dataset to train it"""
@@ -102,16 +131,16 @@ def load_checkpoint(
     return ckpt["iteration"]
 
 def run_epoch(
-        LM: torch.nn.Module, 
+        LM: torch.nn.Module,
         loader,
         loss_fcn,
         optimizers: dict[str, torch.optim.Optimizer] | None,
         max_norm: float,
         lr: float | None = None ,
         lr_scales: dict[str, float] | None = None,
-        device: torch.device | None = None,
         training = True,
-        z_loss_coeff:float = 0.0
+        z_loss_coeff:float = 0.0,
+        master: FP32MasterWeights | None = None,
 ):
     if training :
         LM.train()
@@ -134,8 +163,10 @@ def run_epoch(
                 raise ValueError("optimizers must be provided when training=True")
             lr_scales = lr_scales or {}
 
+            if master is not None:
+                LM.zero_grad(set_to_none=True)  # zero BF16 model grads (optimizer only zeros FP32 masters)
             for name, opt in optimizers.items():
-                opt.zero_grad(set_to_none=True) # cleaning grads from previous step
+                opt.zero_grad(set_to_none=False) if master is not None else opt.zero_grad(set_to_none=True)  # set_to_none=False keeps .grad allocation so sync_grads can reuse via .copy_()
                 # updating learning rate
                 scaled_lr = lr if lr is not None else opt.param_groups[0]["lr"]
                 scaled_lr *= lr_scales.get(name, 1.0)
@@ -143,11 +174,22 @@ def run_epoch(
                     g["lr"] = scaled_lr
 
             loss.backward()
-            grad_norm = global_grad_norm(LM.parameters())
-            optimizer.gradient_clipping(LM.parameters(), M = max_norm)
-            
+
+            # when using FP32 master weights: copy BF16 grads → FP32 masters,
+            # clip & step in FP32, then sync updated FP32 → BF16 model params
+            if master is not None:
+                master.sync_grads()
+                opt_params = [master.fp32_of(p) for p in LM.parameters() if p.requires_grad]
+            else:
+                opt_params = list(LM.parameters())
+
+            grad_norm = optimizer.gradient_clipping(opt_params, M = max_norm)
+
             for opt in optimizers.values():
                 opt.step()
+
+            if master is not None:
+                master.sync_params()
 
         batch_size = logits.size(0)
         # if we use loss instead of loss.detach().item(), we will accumulate the tensors in the computation graph
@@ -309,9 +351,12 @@ def build_optimizer_bundle(
     args: argparse.Namespace,
     lm: torch.nn.Module,
     adamw_lr_scale: float,
+    master: FP32MasterWeights | None = None,
 ) -> tuple[dict[str, torch.optim.Optimizer], dict[str, float]]:
+    _p = master.fp32_of if master else (lambda p: p)  # shorthand: map param → fp32 master (or identity)
+
     if args.optimizer_mode == "adamw":
-        all_params = [p for p in lm.parameters() if p.requires_grad]
+        all_params = [_p(p) for p in lm.parameters() if p.requires_grad]
         opt_adamw = optimizer.AdamW(
             all_params,
             lr=args.lr_max,
@@ -332,7 +377,7 @@ def build_optimizer_bundle(
                 and "lm_head" not in name
                 and not name.startswith("head.")
             )
-            (muons_params if use_muon else adamw_params).append(p)
+            (muons_params if use_muon else adamw_params).append(_p(p))
 
         opt_muon = optimizer.Muon(
             muons_params,
@@ -354,7 +399,7 @@ def build_optimizer_bundle(
         return {"muon": opt_muon, "adamw": opt_adamw}, {"muon": args.muon_lr_scale, "adamw": adamw_lr_scale}
 
     if args.optimizer_mode == "sisa":
-        all_params = [p for p in lm.parameters() if p.requires_grad]
+        all_params = [_p(p) for p in lm.parameters() if p.requires_grad]
         opt_sisa = optimizer.SISA(
             all_params,
             lr=args.lr_max,
@@ -373,7 +418,7 @@ def build_optimizer_bundle(
         return {"sisa": opt_sisa}, {}
 
     if args.optimizer_mode == "nsisa":
-        all_params = [p for p in lm.parameters() if p.requires_grad]
+        all_params = [_p(p) for p in lm.parameters() if p.requires_grad]
         opt_nsisa = optimizer.NSISA(
             all_params,
             lr=args.lr_max,
@@ -515,17 +560,20 @@ def train():
 
     # mixed precision: cast compute layers to bfloat16, keep embedding + head in float32
     compute_dtype = getattr(torch, args.compute_dtype)
+    master_weights: FP32MasterWeights | None = None
     if compute_dtype != torch.float32:
         LM.to(compute_dtype)
         LM.embedding.to(torch.float32)
         for ve in LM.value_embeddings:
             ve.to(torch.float32)
         LM.head.to(torch.float32)
+        master_weights = FP32MasterWeights(LM)
 
     optimizer_bundle, lr_scales = build_optimizer_bundle(
         args=args,
         lm=LM,
         adamw_lr_scale=adamw_lr_scale,
+        master=master_weights,
     )
 
     loss_fcn = losses.cross_entropy
@@ -577,7 +625,8 @@ def train():
             lr_scales=lr_scales,
             device=device,
             training=True,
-            z_loss_coeff=z_loss_coeff
+            z_loss_coeff=z_loss_coeff,
+            master=master_weights,
         )
         val_loss, _ = run_epoch(LM=LM, loader=val_loader, loss_fcn=loss_fcn, max_norm=max_norm, optimizers=None, device = device, training = False)
         total_token_processed += batch_size * context_length

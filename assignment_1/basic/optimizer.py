@@ -533,17 +533,16 @@ class NSISA(torch.optim.Optimizer):
 
 
 # Gradient clipping utility
-def gradient_clipping(params: Iterable[torch.nn.Parameter], M: float, eps: float = 1e-6,):
-    # l2_norm = torch.norm(params)
+def gradient_clipping(params: Iterable[torch.nn.Parameter], M: float, eps: float = 1e-6,) -> float | None:
     grads = [p.grad for p in params if p.grad is not None]
     if not grads:
         return None
-    total_sq = sum(torch.sum(g*g) for g in grads)
+    total_sq = sum(torch.sum(g.float() * g.float()) for g in grads)
     total_norm = torch.sqrt(total_sq)
     clip_coef = M/(total_norm + eps)
-    
+
     if clip_coef < 1:
         for g in grads:
             g.mul_(clip_coef)
 
-    return None
+    return total_norm.item()
