@@ -334,8 +334,10 @@ class Softmax(nn.Module):
         self.d_i = dim
 
     def forward(self, x:Float[Tensor, "..."]) -> Float[Tensor, "..."]:
-        exp_x_stable = torch.exp(x - x.amax(dim= self.d_i, keepdim=True))
-        return exp_x_stable/exp_x_stable.sum(dim= self.d_i, keepdim=True)
+        in_dtype = x.dtype
+        x_fp32 = x.to(torch.float32)
+        exp_x_stable = torch.exp(x_fp32 - x_fp32.amax(dim= self.d_i, keepdim=True))
+        return (exp_x_stable/exp_x_stable.sum(dim= self.d_i, keepdim=True)).to(in_dtype)
     
 
 ## Attention
