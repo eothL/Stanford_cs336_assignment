@@ -738,9 +738,17 @@ class TransformerLM(nn.Module):
             ]
 
         h = x0 = self.embedding(x)
+        # cast embedding output (FP32) → compute dtype (e.g. BF16) for transformer blocks
+        compute_dtype = self.transformer_blocks[0].MHA_layer.q_proj.weight.dtype
+        if h.dtype != compute_dtype:
+            h = x0 = h.to(compute_dtype)
+            value_embed_inputs = [
+                v.to(compute_dtype) if v is not None else None
+                for v in value_embed_inputs
+            ]
         for block, value_embed in zip(self.transformer_blocks, value_embed_inputs):
             h = block(h, token_positions=token_positions, x0=x0, value_embed=value_embed)
-        logits = self.head(h)
+        logits = self.head(h.to(self.lm_head.weight.dtype))
         return logits
 
     def set_ramp_alpha(self, alpha: float) -> None:
