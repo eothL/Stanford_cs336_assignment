@@ -567,6 +567,9 @@ def train():
         for ve in LM.value_embeddings:
             ve.to(torch.float32)
         LM.head.to(torch.float32)
+        for block in LM.transformer_blocks:
+            if block.MHA_layer.log_tau is not None:
+                block.MHA_layer.log_tau.data = block.MHA_layer.log_tau.data.to(torch.float32)
         master_weights = FP32MasterWeights(LM)
 
     optimizer_bundle, lr_scales = build_optimizer_bundle(
