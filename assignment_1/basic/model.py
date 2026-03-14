@@ -119,9 +119,10 @@ class NOBLELinear(nn.Module):
         return out_base + up_proj
 
 ## Normalizer
+@torch.compiler.disable
 def rms_normalize(input:torch.Tensor, eps:float=1e-5):
     # prevent overflow when applying square to input convert input to float 32
-    in_dtype = input.dtype 
+    in_dtype = input.dtype
     x_fp32 = input.to(torch.float32) # prevent overflow for low precision
     mean_square = x_fp32.pow(2).mean(dim=-1, keepdim=True)
     rms = x_fp32 * torch.rsqrt(mean_square+eps) #rsqrt is reverser sqrt 1/sqrt(X)
@@ -333,6 +334,7 @@ class Softmax(nn.Module):
         super().__init__()
         self.d_i = dim
 
+    @torch.compiler.disable
     def forward(self, x:Float[Tensor, "..."]) -> Float[Tensor, "..."]:
         in_dtype = x.dtype
         x_fp32 = x.to(torch.float32)
