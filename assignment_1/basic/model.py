@@ -458,7 +458,7 @@ class multihead_self_attention(nn.Module):
         V_head: Float[Tensor, "... num_heads seq_len d_k"] = V.reshape(head_shape).transpose(-2,-3)
 
         lead_dim = Q_head.ndim - 3
-        tau = torch.exp(self.log_tau).view((*([1] * lead_dim), self.num_heads, 1, 1)) 
+        tau = torch.exp(self.log_tau).to(Q_head.dtype).view((*([1] * lead_dim), self.num_heads, 1, 1))
 
         Q_head, K_head = QK_Norm(Q = Q_head, K = K_head)
         if rope is not None and token_positions is not None:
