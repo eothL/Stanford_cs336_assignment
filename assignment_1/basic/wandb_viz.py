@@ -10,7 +10,7 @@ Usage:
     python wandb_viz.py plot
     python wandb_viz.py plot --run-id <run_id> --metrics loss,grad_norm
 
-Requires: WANDB_ENTITY and WANDB_PROJECT env vars (or pass --entity / --project).
+Reads wandb credentials from config/config.yaml (or env vars / CLI flags).
 """
 
 import argparse
@@ -19,9 +19,19 @@ import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import yaml
 
 # ── paths ────────────────────────────────────────────────────────────────
 DATA_DIR = Path(__file__).parent / "wandb_local"
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
+
+
+def load_config() -> dict:
+    """Load wandb config from config/config.yaml."""
+    if CONFIG_PATH.exists():
+        with open(CONFIG_PATH) as f:
+            return yaml.safe_load(f) or {}
+    return {}
 
 
 # ── fetch ────────────────────────────────────────────────────────────────
@@ -160,10 +170,15 @@ def main():
     args = parser.parse_args()
 
     if args.cmd == "fetch":
-        if not args.entity or not args.project:
-            parser.error("Set WANDB_ENTITY and WANDB_PROJECT env vars, "
-                         "or pass --entity and --project")
-        fetch_runs(args.entity, args.project, args.run_id)
+        cfg = load_config().get("wandb", {})
+        entity = args.entity or cfg.get("entity") or ""
+        project = args.project or cfg.get("project") or ""
+        if not entity or not project:
+            parser.error(
+                "Set entity/project in config/config.yaml, "
+                "or pass --entity and --project (or env vars)"
+            )
+        fetch_runs(entity, project, args.run_id)
 
     elif args.cmd == "plot":
         if not DATA_DIR.exists():
