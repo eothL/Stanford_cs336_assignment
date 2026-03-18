@@ -247,6 +247,55 @@ With z_loss: MVE+z_loss=3.3333 (`d30u09jm`) vs no MVE=3.3739 → delta -0.041
 
 ---
 
+## Best Architecture & Configuration
+
+**Best run**: `ush9w11e` — **Best Val Loss: 3.3323** (14k steps, FP32)
+
+### Model
+| Parameter | Value |
+|-----------|-------|
+| Architecture | Decoder-only Transformer (Pre-Norm) |
+| Layers | 12 |
+| Heads | 6 |
+| d_model | 768 |
+| d_ff | 8/3 × 768 = 2048 (rounded to 64) |
+| Context length | 512 |
+| Vocab size | 32,000 |
+| Activation | **ramp_relu** (ReLU → ReLU² cosine curriculum) |
+| Normalization | RMSNorm (pre-norm) |
+| Position encoding | RoPE (θ=10000) |
+| QK-Norm | Yes (learnable τ per head) |
+| Weight tying | Yes (embedding = lm_head) |
+| X0-mixing | Yes |
+| Value embeddings (MVE) | 1 |
+
+### Training
+| Parameter | Value |
+|-----------|-------|
+| Optimizer | AdamW |
+| Batch size | 84 |
+| lr_max | 0.1 |
+| lr_min | 0.00001 |
+| Betas | (0.9, 0.95) |
+| Weight decay | 0.01 |
+| Grad clip | 1.0 |
+| Warmup iters | 500 |
+| Cosine cycle iters | 24,000 |
+| Z-loss coefficient | 0.0001 |
+| Compute dtype | float32 |
+| Torch compile | Yes |
+
+### Why this combination works
+- **ramp_relu** curriculum gives stable early training (ReLU) then sharper feature selection (ReLU²)
+- **Large batch + high LR** regime (bs=84, lr=0.1) with **β₂=0.95** provides faster convergence and better generalization
+- **QK-norm + learnable τ** stabilizes attention at high learning rates
+- **Weight tying** reduces parameters while improving embedding quality via dual gradient signal
+- **X0-mixing + MVE** provide marginal but consistent gains when stacked
+- **Z-loss** prevents logit drift over long training runs
+- **Pre-norm + RoPE** are mandatory foundations (removing either is catastrophic)
+
+---
+
 ## Missing Runs for Complete Ablation
 
 The following runs would strengthen the ablation study by eliminating confounds:
