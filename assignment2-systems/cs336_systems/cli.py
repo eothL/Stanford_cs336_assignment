@@ -26,7 +26,7 @@ def parser_arg() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=4)     # fixed for the homework
     parser.add_argument("--context-length", type=int, default=128, help="context length of the model")
     parser.add_argument("--rope-theta", type=float, default=10000.0)
-
+    parser.add_argument("--epoch", type=int, default= 10, help="Number of training step, default = 10")
     # benchmarking settings
     parser.add_argument("--rep", type=int, default=10, help="Number of measurement steps")
     parser.add_argument("--mode", type=str, default="full", choices=["forward", "full"],
