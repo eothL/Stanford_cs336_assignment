@@ -36,8 +36,6 @@ def run_step(LM:model.BasicsTransformerLM, x, y, mode):
         
 
     return
-        
-
 
 def _sync(device):
     """Synchronize GPU if running on CUDA."""
@@ -57,7 +55,6 @@ def benchmarking_script(LM, x, y, mode, warmup_steps, rep, device):
     # timed runs — collect per-step times for mean/std
     step_times = []
     for _ in range(rep):
-        _sync(device)
         start = timeit.default_timer()
 
         run_step(LM, x, y, mode)
