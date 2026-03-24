@@ -1,7 +1,6 @@
 import torch
 import timeit
 import numpy as np
-from contextlib import nullcontext
 from dataclasses import asdict
 
 from cs336_basics import model, nn_utils
