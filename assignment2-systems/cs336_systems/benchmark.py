@@ -1,73 +1,92 @@
+import math
 import torch
+import torch.cuda.nvtx as nvtx
 import timeit
 import numpy as np
 from dataclasses import asdict
+from einops import einsum
 
 from cs336_basics import model, nn_utils
+from cs336_basics.nn_utils import softmax
 
 from cs336_systems.cli import parser_arg
 from cs336_systems.config import ModelConfig
 
 
-def run_step(LM:model.BasicsTransformerLM, x, y, mode):
-    """Run a single benchmarking step (forward-only or forward+backward).
+# ── NVTX-annotated attention (for question e) ─────────────────────────
+def annotated_scaled_dot_product_attention(Q, K, V, mask=None):
+    d_k = K.shape[-1]
 
-    Args:
-        LM: the transformer model
-        x: input token ids [batch_size, context_length]
-        y: target token ids [batch_size, context_length]
-        mode: "forward" or "full" (forward + backward)
+    with nvtx.range("computing attention scores"):
+        attention_scores = einsum(Q, K, "... query d_k, ... key d_k -> ... query key") / math.sqrt(d_k)
+        if mask is not None:
+            attention_scores = torch.where(mask, attention_scores, float("-inf"))
+
+    with nvtx.range("computing softmax"):
+        attention_weights = softmax(attention_scores, dim=-1)
+
+    with nvtx.range("final matmul"):
+        output = einsum(attention_weights, V, "... query key, ... key d_v -> ... query d_v")
+
+    return output
+
+
+# ── Core step logic ───────────────────────────────────────────────────
+def run_step(LM, x, y, mode, optimizer=None):
+    """Run a single benchmarking step.
+
+    Modes:
+        "forward"  — inference only (no grad)
+        "full"     — forward + backward
+        "train"    — forward + backward + optimizer.step()
     """
     if mode == "forward":
         LM.eval()
-        context = torch.no_grad()
+        with torch.no_grad():
+            logits = LM(x)
     else:
         LM.train()
-        context = torch.enable_grad()
-
-    with context:
+        LM.zero_grad(set_to_none=True)
         logits = LM(x)
-        
-        if mode != "forward":
-            LM.zero_grad(set_to_none=True)
-            loss = nn_utils.cross_entropy(logits, y)
-            loss.backward()
-        
+        loss = nn_utils.cross_entropy(logits, y)
+        loss.backward()
 
-    return
+        if mode == "train" and optimizer is not None:
+            optimizer.step()
 
+
+# ── Timing harness ────────────────────────────────────────────────────
 def _sync(device):
-    """Synchronize GPU if running on CUDA."""
     if device.startswith("cuda"):
         torch.cuda.synchronize()
 
 
-def benchmarking_script(LM, x, y, mode, warmup_steps, rep, device):
+def benchmarking_script(LM, x, y, mode, warmup_steps, rep, device, optimizer=None):
     """Time `rep` steps after `warmup_steps` warmup, return per-step times."""
 
-    # warmup
     for _ in range(warmup_steps):
-        run_step(LM, x, y, mode)
+        run_step(LM, x, y, mode, optimizer)
 
     _sync(device)
 
-    # timed runs — collect per-step times for mean/std
     step_times = []
     for _ in range(rep):
         start = timeit.default_timer()
-
-        run_step(LM, x, y, mode)
-
+        run_step(LM, x, y, mode, optimizer)
         _sync(device)
         step_times.append(timeit.default_timer() - start)
 
     return step_times
 
 
+# ── Main ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     args = parser_arg()
 
-    # build model from CLI args
+    # optionally monkey-patch attention with NVTX annotations
+    if args.annotate:
+        model.scaled_dot_product_attention = annotated_scaled_dot_product_attention
+
     model_config = ModelConfig(
         vocab_size=args.vocab_size,
         context_length=args.context_length,
@@ -77,20 +96,26 @@ if __name__ == "__main__":
         d_ff=args.d_ff,
         rope_theta=args.rope_theta,
     )
-    
+
     device = args.device
     LM = model.BasicsTransformerLM(**asdict(model_config)).to(device)
 
-    # generate random data 
+    # random data
     x = torch.randint(0, args.vocab_size, (args.batch_size, args.context_length), device=device)
     y = torch.randint(0, args.vocab_size, (args.batch_size, args.context_length), device=device)
+
+    # optimizer (only used in "train" mode)
+    optimizer = None
+    if args.mode == "train":
+        optimizer = torch.optim.AdamW(LM.parameters(), lr=1e-4)
 
     step_times = benchmarking_script(
         LM, x, y,
         mode=args.mode,
         warmup_steps=args.warmup_step,
         rep=args.rep,
-        device=device
+        device=device,
+        optimizer=optimizer,
     )
 
     mean_time = np.mean(step_times)
