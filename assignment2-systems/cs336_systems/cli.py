@@ -29,9 +29,10 @@ def parser_arg() -> argparse.Namespace:
     parser.add_argument("--epoch", type=int, default= 10, help="Number of training step, default = 10")
     # benchmarking settings
     parser.add_argument("--rep", type=int, default=10, help="Number of measurement steps")
-    parser.add_argument("--mode", type=str, default="full", choices=["forward", "full"],
-                        help="'forward' = forward only, 'full' = forward + backward")
+    parser.add_argument("--mode", type=str, default="full", choices=["forward", "full", "train"],
+                        help="'forward' = forward only, 'full' = forward + backward, 'train' = full + optimizer step")
     parser.add_argument("--mixed-precision", action="store_true", help="Use BF16 mixed precision")
+    parser.add_argument("--annotate", action="store_true", help="Use NVTX-annotated attention for nsys profiling")
 
     # other
     parser.add_argument("--device", type=str, default="cpu", help="device used for training, default: cpu")
