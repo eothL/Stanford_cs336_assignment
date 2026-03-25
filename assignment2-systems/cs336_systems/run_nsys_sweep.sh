@@ -7,7 +7,11 @@
 set -e
 
 OUT_DIR="${1:-nsys_results}"
+RESULTS_FILE="${OUT_DIR}/results.jsonl"
 mkdir -p "$OUT_DIR"
+
+# clear previous results
+> "$RESULTS_FILE"
 
 # Table 1 model configs: name d_model d_ff num_layers num_heads
 MODELS=(
@@ -43,6 +47,7 @@ for model_spec in "${MODELS[@]}"; do
                     --mode "$mode" \
                     --warmup-step 5 \
                     --rep 10 \
+                    --results-file "$RESULTS_FILE" \
                 2>&1 | tee "${OUT_DIR}/${tag}.log"
 
             echo ""
@@ -64,5 +69,9 @@ uv run nsys profile \
         --rep 10 \
         --annotate \
     2>&1 | tee "${OUT_DIR}/small_ctx128_forward_annotated.log"
+
+# convert results to markdown table
+echo "=== Generating markdown table ==="
+uv run python -m cs336_systems.results_to_markdown "$RESULTS_FILE" -o "${OUT_DIR}/results.md"
 
 echo "=== All done! Results in ${OUT_DIR}/ ==="
