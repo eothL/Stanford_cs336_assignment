@@ -1,4 +1,5 @@
 import math
+import json
 import torch
 import torch.cuda.nvtx as nvtx
 import timeit
@@ -120,8 +121,26 @@ if __name__ == "__main__":
 
     mean_time = np.mean(step_times)
     std_time = np.std(step_times)
+
+    result = {
+        "mode": args.mode,
+        "mixed_precision": args.mixed_precision,
+        "d_model": args.d_model,
+        "d_ff": args.d_ff,
+        "num_layers": args.num_layers,
+        "num_heads": args.num_heads,
+        "ctx_len": args.context_length,
+        "mean_time": round(mean_time, 4),
+        "std_time": round(std_time, 4),
+    }
+
     print(f"Mode: {args.mode} | Mixed precision: {args.mixed_precision}")
     print(f"Config: d_model={args.d_model}, d_ff={args.d_ff}, "
           f"layers={args.num_layers}, heads={args.num_heads}, "
           f"ctx_len={args.context_length}")
     print(f"Mean step time: {mean_time:.4f}s ± {std_time:.4f}s (over {args.rep} steps)")
+
+    # append result as JSON line to file
+    if args.results_file:
+        with open(args.results_file, "a") as f:
+            f.write(json.dumps(result) + "\n")

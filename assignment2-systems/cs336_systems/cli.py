@@ -33,6 +33,7 @@ def parser_arg() -> argparse.Namespace:
                         help="'forward' = forward only, 'full' = forward + backward, 'train' = full + optimizer step")
     parser.add_argument("--mixed-precision", action="store_true", help="Use BF16 mixed precision")
     parser.add_argument("--annotate", action="store_true", help="Use NVTX-annotated attention for nsys profiling")
+    parser.add_argument("--results-file", type=str, default=None, help="Path to append JSON-lines results (for markdown table generation)")
 
     # other
     parser.add_argument("--device", type=str, default="cpu", help="device used for training, default: cpu")
