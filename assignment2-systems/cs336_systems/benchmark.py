@@ -144,3 +144,27 @@ if __name__ == "__main__":
     if args.results_file:
         with open(args.results_file, "a") as f:
             f.write(json.dumps(result) + "\n")
+
+def mixed_precision_accumulation():
+    s = torch.tensor(0, dtype=torch.float32)
+    for _ in range(1000):
+        s += torch.tensor(0.01, dtype= torch.float32)
+    print(s)
+
+    s = torch.tensor(0, dtype=torch.float16)
+    for _ in range(1000):
+        s += torch.tensor(0.01, dtype= torch.float16)
+    print(s)
+
+    s = torch.tensor(0, dtype=torch.float32)
+    for _ in range(1000):
+        s += torch.tensor(0.01, dtype= torch.float16)
+    print(s)
+
+    s = torch.tensor(0, dtype=torch.float32)
+    for _ in range(1000):
+        x = torch.tensor(0.01, dtype= torch.float16)
+        s += x.type(torch.float32)
+    print(s)
+
+    
