@@ -21,3 +21,4 @@ wandb/
 **/wandb/
 *.wandb
 .vscode/
+*.nsys-rep
