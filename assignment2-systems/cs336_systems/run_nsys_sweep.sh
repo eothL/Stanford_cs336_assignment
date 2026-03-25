@@ -31,7 +31,6 @@ for model_spec in "${MODELS[@]}"; do
 
             # Run with nsys profiling
             uv run nsys profile \
-                --pytorch \
                 -o "${OUT_DIR}/${tag}" \
                 --force-overwrite true \
                 python -m cs336_systems.benchmark \
@@ -54,7 +53,6 @@ done
 # Separate run with NVTX annotations for question (e): softmax vs matmul
 echo "=== Profiling: small model with NVTX annotations ==="
 uv run nsys profile \
-    --pytorch \
     -o "${OUT_DIR}/small_ctx128_forward_annotated" \
     --force-overwrite true \
     python -m cs336_systems.benchmark \
