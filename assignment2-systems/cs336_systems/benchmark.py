@@ -6,6 +6,7 @@ import timeit
 import numpy as np
 from dataclasses import asdict
 from einops import einsum
+from contextlib import nullcontext
 
 from cs336_basics import model, nn_utils
 from cs336_basics.nn_utils import softmax
@@ -33,7 +34,7 @@ def annotated_scaled_dot_product_attention(Q, K, V, mask=None):
 
 
 # ── Core step logic ───────────────────────────────────────────────────
-def run_step(LM, x, y, mode, optimizer=None):
+def run_step(LM, x, y, mode, amp_context, optimizer=None):
     """Run a single benchmarking step.
 
     Modes:
@@ -43,13 +44,14 @@ def run_step(LM, x, y, mode, optimizer=None):
     """
     if mode == "forward":
         LM.eval()
-        with torch.no_grad():
+        with torch.no_grad(), amp_context:
             logits = LM(x)
     else:
         LM.train()
         LM.zero_grad(set_to_none=True)
-        logits = LM(x)
-        loss = nn_utils.cross_entropy(logits, y)
+        with amp_context:
+            logits = LM(x)
+            loss = nn_utils.cross_entropy(logits, y)
         loss.backward()
 
         if mode == "train" and optimizer is not None:
@@ -62,18 +64,18 @@ def _sync(device):
         torch.cuda.synchronize()
 
 
-def benchmarking_script(LM, x, y, mode, warmup_steps, rep, device, optimizer=None):
+def benchmarking_script(LM, x, y, mode, warmup_steps, rep, device, amp_context, optimizer=None):
     """Time `rep` steps after `warmup_steps` warmup, return per-step times."""
 
     for _ in range(warmup_steps):
-        run_step(LM, x, y, mode, optimizer)
+        run_step(LM, x, y, mode, amp_context, optimizer)
 
     _sync(device)
 
     step_times = []
     for _ in range(rep):
         start = timeit.default_timer()
-        run_step(LM, x, y, mode, optimizer)
+        run_step(LM, x, y, mode, amp_context, optimizer)
         _sync(device)
         step_times.append(timeit.default_timer() - start)
 
@@ -105,6 +107,13 @@ if __name__ == "__main__":
     x = torch.randint(0, args.vocab_size, (args.batch_size, args.context_length), device=device)
     y = torch.randint(0, args.vocab_size, (args.batch_size, args.context_length), device=device)
 
+    # mixed precision context
+    amp_context = (
+        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if args.mixed_precision
+        else nullcontext()
+    )
+
     # optimizer (only used in "train" mode)
     optimizer = None
     if args.mode == "train":
@@ -116,6 +125,7 @@ if __name__ == "__main__":
         warmup_steps=args.warmup_step,
         rep=args.rep,
         device=device,
+        amp_context=amp_context,
         optimizer=optimizer,
     )
 
@@ -166,5 +176,3 @@ def mixed_precision_accumulation():
         x = torch.tensor(0.01, dtype= torch.float16)
         s += x.type(torch.float32)
     print(s)
-
-    
