@@ -15,7 +15,7 @@ class ModelConfig:
 
 @dataclass(slots=True)
 class TrainingConfig:
-    model: ModelConfig
+    model: ModelConfig | None = None
     batch_size: int = 8
     max_steps: int = 1_000
     device: str = "cpu"
@@ -23,3 +23,4 @@ class TrainingConfig:
     val_dataset: str | Path | None = None
     learning_rate: float = 3e-4
     seed: int = 93
+    memory_profiling: bool = False

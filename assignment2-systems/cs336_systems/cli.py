@@ -27,6 +27,7 @@ def parser_arg() -> argparse.Namespace:
     parser.add_argument("--context-length", type=int, default=128, help="context length of the model")
     parser.add_argument("--rope-theta", type=float, default=10000.0)
     parser.add_argument("--epoch", type=int, default= 10, help="Number of training step, default = 10")
+    
     # benchmarking settings
     parser.add_argument("--rep", type=int, default=10, help="Number of measurement steps")
     parser.add_argument("--mode", type=str, default="full", choices=["forward", "full", "train"],
@@ -34,7 +35,7 @@ def parser_arg() -> argparse.Namespace:
     parser.add_argument("--mixed-precision", action="store_true", help="Use BF16 mixed precision")
     parser.add_argument("--annotate", action="store_true", help="Use NVTX-annotated attention for nsys profiling")
     parser.add_argument("--results-file", type=str, default=None, help="Path to append JSON-lines results (for markdown table generation)")
-
+    parser.add_argument("--memory-profiling", action="store_true", help="Use torch memory profiler")
     # other
     parser.add_argument("--device", type=str, default="cpu", help="device used for training, default: cpu")
     # Read yaml config file

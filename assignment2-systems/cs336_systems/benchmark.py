@@ -99,8 +99,10 @@ if __name__ == "__main__":
         d_ff=args.d_ff,
         rope_theta=args.rope_theta,
     )
-
     device = args.device
+    if args.memory_profiling:
+        torch.cuda.memory._record_memory_history(max_entries=1000000)
+
     LM = model.BasicsTransformerLM(**asdict(model_config)).to(device)
 
     # random data
@@ -128,9 +130,18 @@ if __name__ == "__main__":
         amp_context=amp_context,
         optimizer=optimizer,
     )
+    if args.memory_profiling:
+        # save then stop recording
+        torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
+        torch.cuda.memory._record_memory_history(enabled=None)
 
     mean_time = np.mean(step_times)
     std_time = np.std(step_times)
+
+    # peak memory (only meaningful on CUDA)
+    peak_memory_mb = None
+    if device.startswith("cuda"):
+        peak_memory_mb = round(torch.cuda.max_memory_allocated() / (1024 ** 2), 2)
 
     result = {
         "mode": args.mode,
@@ -142,6 +153,7 @@ if __name__ == "__main__":
         "ctx_len": args.context_length,
         "mean_time": round(mean_time, 4),
         "std_time": round(std_time, 4),
+        "peak_memory_mb": peak_memory_mb,
     }
 
     print(f"Mode: {args.mode} | Mixed precision: {args.mixed_precision}")
@@ -149,6 +161,8 @@ if __name__ == "__main__":
           f"layers={args.num_layers}, heads={args.num_heads}, "
           f"ctx_len={args.context_length}")
     print(f"Mean step time: {mean_time:.4f}s ± {std_time:.4f}s (over {args.rep} steps)")
+    if peak_memory_mb is not None:
+        print(f"Peak memory: {peak_memory_mb:.2f} MB")
 
     # append result as JSON line to file
     if args.results_file:
