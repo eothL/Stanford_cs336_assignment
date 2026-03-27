@@ -1,0 +1,14 @@
+{"mode": "forward", "mixed_precision": false, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 256, "mean_time": 0.1752, "std_time": 0.0, "peak_memory_mb": 13334.92}
+{"mode": "train", "mixed_precision": false, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 256, "mean_time": 0.6617, "std_time": 0.0, "peak_memory_mb": 65436.92}
+{"mode": "forward", "mixed_precision": false, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 128, "mean_time": 0.0898, "std_time": 0.0, "peak_memory_mb": 13236.68}
+{"mode": "train", "mixed_precision": false, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 128, "mean_time": 0.4074, "std_time": 0.0, "peak_memory_mb": 65576.22}
+{"mode": "forward", "mixed_precision": false, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 256, "mean_time": 0.1748, "std_time": 0.0, "peak_memory_mb": 13334.92}
+{"mode": "train", "mixed_precision": false, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 256, "mean_time": 0.662, "std_time": 0.0, "peak_memory_mb": 65436.92}
+{"mode": "forward", "mixed_precision": false, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 512, "mean_time": 0.3389, "std_time": 0.0, "peak_memory_mb": 13769.33}
+{"mode": "train", "mixed_precision": false, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 512, "mean_time": 1.1831, "std_time": 0.0, "peak_memory_mb": 67169.04}
+{"mode": "forward", "mixed_precision": true, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 128, "mean_time": 0.0665, "std_time": 0.0, "peak_memory_mb": 19623.01}
+{"mode": "train", "mixed_precision": true, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 128, "mean_time": 0.2535, "std_time": 0.0, "peak_memory_mb": 65500.88}
+{"mode": "forward", "mixed_precision": true, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 256, "mean_time": 0.0678, "std_time": 0.0, "peak_memory_mb": 19640.09}
+{"mode": "train", "mixed_precision": true, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 256, "mean_time": 0.2836, "std_time": 0.0, "peak_memory_mb": 65444.92}
+{"mode": "forward", "mixed_precision": true, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 512, "mean_time": 0.0797, "std_time": 0.0, "peak_memory_mb": 19871.33}
+{"mode": "train", "mixed_precision": true, "d_model": 2560, "d_ff": 10240, "num_layers": 32, "num_heads": 32, "ctx_len": 512, "mean_time": 0.3582, "std_time": 0.0, "peak_memory_mb": 65296.67}
