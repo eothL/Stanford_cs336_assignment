@@ -36,8 +36,10 @@ def parser_arg() -> argparse.Namespace:
     parser.add_argument("--annotate", action="store_true", help="Use NVTX-annotated attention for nsys profiling")
     parser.add_argument("--results-file", type=str, default=None, help="Path to append JSON-lines results (for markdown table generation)")
     parser.add_argument("--memory-profiling", action="store_true", help="Use torch memory profiler")
+    parser.add_argument("--compile", action="store_true", help="Use torch.compile to compile model")
     # other
     parser.add_argument("--device", type=str, default="cpu", help="device used for training, default: cpu")
+
     # Read yaml config file
     parser.add_argument("--config", type=str, default=None, help="add path to the yaml config file")
     pre_args, _ = parser.parse_known_args()

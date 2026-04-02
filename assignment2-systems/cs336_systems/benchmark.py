@@ -104,6 +104,8 @@ if __name__ == "__main__":
         torch.cuda.memory._record_memory_history(max_entries=1000000)
 
     LM = model.BasicsTransformerLM(**asdict(model_config)).to(device)
+    if args.compile is True:
+        LM = torch.compile(LM)
 
     # random data
     x = torch.randint(0, args.vocab_size, (args.batch_size, args.context_length), device=device)
@@ -154,6 +156,7 @@ if __name__ == "__main__":
         "mean_time": round(mean_time, 4),
         "std_time": round(std_time, 4),
         "peak_memory_mb": peak_memory_mb,
+        "compile": args.compile
     }
 
     print(f"Mode: {args.mode} | Mixed precision: {args.mixed_precision}")
