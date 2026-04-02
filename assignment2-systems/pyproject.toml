@@ -17,6 +17,7 @@ dependencies = [
     "wandb>=0.19.7",
     "pandas>=2",
     "tabulate>=0.9",
+    "triton>=3.0.0; sys_platform == 'linux'",
     "ty>=0.0.1a16",
 ]
 
