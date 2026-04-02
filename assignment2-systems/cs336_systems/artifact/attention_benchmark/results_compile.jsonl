@@ -1,0 +1,40 @@
+{"d_head": 16, "seq_len": 256, "fwd_mean": 0.00014, "fwd_std": 1.9e-05, "bwd_mean": 0.000402, "bwd_std": 2.7e-05, "memory_before_bwd_mb": 68.9, "peak_memory_mb": 76.92}
+{"compiled": true, "d_head": 16, "seq_len": 256, "fwd_mean": 0.000123, "fwd_std": 1.8e-05, "bwd_mean": 0.000373, "bwd_std": 2e-05, "memory_before_bwd_mb": 68.91, "peak_memory_mb": 73.06}
+{"d_head": 16, "seq_len": 1024, "fwd_mean": 0.000238, "fwd_std": 1.7e-05, "bwd_mean": 0.000727, "bwd_std": 3.3e-05, "memory_before_bwd_mb": 131.59, "peak_memory_mb": 259.69}
+{"compiled": true, "d_head": 16, "seq_len": 1024, "fwd_mean": 0.000195, "fwd_std": 1.2e-05, "bwd_mean": 0.000481, "bwd_std": 2.5e-05, "memory_before_bwd_mb": 131.63, "peak_memory_mb": 196.25}
+{"d_head": 16, "seq_len": 4096, "fwd_mean": 0.002576, "fwd_std": 7e-06, "bwd_mean": 0.00629, "bwd_std": 3.8e-05, "memory_before_bwd_mb": 1102.38, "peak_memory_mb": 3150.75}
+{"compiled": true, "d_head": 16, "seq_len": 4096, "fwd_mean": 0.001104, "fwd_std": 1e-05, "bwd_mean": 0.002708, "bwd_std": 2.4e-05, "memory_before_bwd_mb": 1102.5, "peak_memory_mb": 2129.0}
+{"d_head": 16, "seq_len": 8192, "fwd_mean": 0.010042, "fwd_std": 1.1e-05, "bwd_mean": 0.024287, "bwd_std": 5.6e-05, "memory_before_bwd_mb": 4188.75, "peak_memory_mb": 12381.5}
+{"compiled": true, "d_head": 16, "seq_len": 8192, "fwd_mean": 0.004338, "fwd_std": 1.5e-05, "bwd_mean": 0.010491, "bwd_std": 9.6e-05, "memory_before_bwd_mb": 4189.0, "peak_memory_mb": 8290.0}
+{"d_head": 16, "seq_len": 16384, "fwd_mean": 0.039412, "fwd_std": 2.9e-05, "bwd_mean": 0.095156, "bwd_std": 8.5e-05, "memory_before_bwd_mb": 16505.5, "peak_memory_mb": 49275.0}
+{"compiled": true, "d_head": 16, "seq_len": 16384, "fwd_mean": 0.015885, "fwd_std": 4.2e-05, "bwd_mean": 0.039903, "bwd_std": 8.9e-05, "memory_before_bwd_mb": 16506.0, "peak_memory_mb": 32900.0}
+{"d_head": 32, "seq_len": 256, "fwd_mean": 0.000144, "fwd_std": 1.7e-05, "bwd_mean": 0.000497, "bwd_std": 4.6e-05, "memory_before_bwd_mb": 69.77, "peak_memory_mb": 77.8}
+{"compiled": true, "d_head": 32, "seq_len": 256, "fwd_mean": 0.000171, "fwd_std": 1.8e-05, "bwd_mean": 0.000396, "bwd_std": 2.9e-05, "memory_before_bwd_mb": 69.78, "peak_memory_mb": 74.06}
+{"d_head": 32, "seq_len": 1024, "fwd_mean": 0.000248, "fwd_std": 7e-06, "bwd_mean": 0.000735, "bwd_std": 2.1e-05, "memory_before_bwd_mb": 135.09, "peak_memory_mb": 263.19}
+{"compiled": true, "d_head": 32, "seq_len": 1024, "fwd_mean": 0.000206, "fwd_std": 1.4e-05, "bwd_mean": 0.000498, "bwd_std": 4.2e-05, "memory_before_bwd_mb": 135.13, "peak_memory_mb": 200.25}
+{"d_head": 32, "seq_len": 4096, "fwd_mean": 0.002658, "fwd_std": 1.2e-05, "bwd_mean": 0.006409, "bwd_std": 6.6e-05, "memory_before_bwd_mb": 1116.38, "peak_memory_mb": 3164.75}
+{"compiled": true, "d_head": 32, "seq_len": 4096, "fwd_mean": 0.001489, "fwd_std": 5.6e-05, "bwd_mean": 0.002982, "bwd_std": 4.1e-05, "memory_before_bwd_mb": 1116.5, "peak_memory_mb": 2145.0}
+{"d_head": 32, "seq_len": 8192, "fwd_mean": 0.010353, "fwd_std": 1.2e-05, "bwd_mean": 0.024588, "bwd_std": 5.8e-05, "memory_before_bwd_mb": 4216.75, "peak_memory_mb": 12409.5}
+{"compiled": true, "d_head": 32, "seq_len": 8192, "fwd_mean": 0.005763, "fwd_std": 3.2e-05, "bwd_mean": 0.011288, "bwd_std": 9.8e-05, "memory_before_bwd_mb": 4217.0, "peak_memory_mb": 8322.0}
+{"d_head": 32, "seq_len": 16384, "fwd_mean": 0.040571, "fwd_std": 2.4e-05, "bwd_mean": 0.09634, "bwd_std": 8.4e-05, "memory_before_bwd_mb": 16561.5, "peak_memory_mb": 49331.0}
+{"compiled": true, "d_head": 32, "seq_len": 16384, "fwd_mean": 0.017753, "fwd_std": 0.00025, "bwd_mean": 0.041114, "bwd_std": 9.2e-05, "memory_before_bwd_mb": 16562.0, "peak_memory_mb": 32964.0}
+{"d_head": 64, "seq_len": 256, "fwd_mean": 0.000148, "fwd_std": 1.7e-05, "bwd_mean": 0.000517, "bwd_std": 4e-05, "memory_before_bwd_mb": 71.52, "peak_memory_mb": 79.55}
+{"compiled": true, "d_head": 64, "seq_len": 256, "fwd_mean": 0.000176, "fwd_std": 2.1e-05, "bwd_mean": 0.00041, "bwd_std": 5.7e-05, "memory_before_bwd_mb": 71.53, "peak_memory_mb": 76.06}
+{"d_head": 64, "seq_len": 1024, "fwd_mean": 0.000269, "fwd_std": 6e-06, "bwd_mean": 0.00076, "bwd_std": 3.7e-05, "memory_before_bwd_mb": 142.09, "peak_memory_mb": 270.19}
+{"compiled": true, "d_head": 64, "seq_len": 1024, "fwd_mean": 0.000323, "fwd_std": 1e-05, "bwd_mean": 0.000525, "bwd_std": 2.8e-05, "memory_before_bwd_mb": 142.13, "peak_memory_mb": 208.25}
+{"d_head": 64, "seq_len": 4096, "fwd_mean": 0.002937, "fwd_std": 6e-06, "bwd_mean": 0.00699, "bwd_std": 8.6e-05, "memory_before_bwd_mb": 1144.38, "peak_memory_mb": 3192.75}
+{"compiled": true, "d_head": 64, "seq_len": 4096, "fwd_mean": 0.001718, "fwd_std": 9e-06, "bwd_mean": 0.00333, "bwd_std": 4.1e-05, "memory_before_bwd_mb": 1144.5, "peak_memory_mb": 2177.0}
+{"d_head": 64, "seq_len": 8192, "fwd_mean": 0.011574, "fwd_std": 0.000103, "bwd_mean": 0.026974, "bwd_std": 7.5e-05, "memory_before_bwd_mb": 4272.75, "peak_memory_mb": 12465.5}
+{"compiled": true, "d_head": 64, "seq_len": 8192, "fwd_mean": 0.005947, "fwd_std": 1.6e-05, "bwd_mean": 0.012875, "bwd_std": 8.1e-05, "memory_before_bwd_mb": 4273.0, "peak_memory_mb": 8386.0}
+{"d_head": 64, "seq_len": 16384, "fwd_mean": 0.045863, "fwd_std": 3.2e-05, "bwd_mean": 0.106168, "bwd_std": 8.2e-05, "memory_before_bwd_mb": 16673.5, "peak_memory_mb": 49443.0}
+{"compiled": true, "d_head": 64, "seq_len": 16384, "fwd_mean": 0.023196, "fwd_std": 0.000338, "bwd_mean": 0.050967, "bwd_std": 0.000176, "memory_before_bwd_mb": 16674.0, "peak_memory_mb": 33092.0}
+{"d_head": 128, "seq_len": 256, "fwd_mean": 0.000145, "fwd_std": 1.7e-05, "bwd_mean": 0.000517, "bwd_std": 5.2e-05, "memory_before_bwd_mb": 75.02, "peak_memory_mb": 83.05}
+{"compiled": true, "d_head": 128, "seq_len": 256, "fwd_mean": 0.000171, "fwd_std": 1.8e-05, "bwd_mean": 0.000412, "bwd_std": 5.4e-05, "memory_before_bwd_mb": 75.03, "peak_memory_mb": 80.06}
+{"d_head": 128, "seq_len": 1024, "fwd_mean": 0.000308, "fwd_std": 8e-06, "bwd_mean": 0.000846, "bwd_std": 3e-05, "memory_before_bwd_mb": 156.09, "peak_memory_mb": 284.19}
+{"compiled": true, "d_head": 128, "seq_len": 1024, "fwd_mean": 0.000363, "fwd_std": 9e-06, "bwd_mean": 0.000606, "bwd_std": 3.6e-05, "memory_before_bwd_mb": 156.13, "peak_memory_mb": 224.25}
+{"d_head": 128, "seq_len": 4096, "fwd_mean": 0.003542, "fwd_std": 8e-06, "bwd_mean": 0.008297, "bwd_std": 0.000107, "memory_before_bwd_mb": 1200.38, "peak_memory_mb": 3248.75}
+{"compiled": true, "d_head": 128, "seq_len": 4096, "fwd_mean": 0.002326, "fwd_std": 1.1e-05, "bwd_mean": 0.004578, "bwd_std": 4.4e-05, "memory_before_bwd_mb": 1200.5, "peak_memory_mb": 2241.0}
+{"d_head": 128, "seq_len": 8192, "fwd_mean": 0.013869, "fwd_std": 1.1e-05, "bwd_mean": 0.031476, "bwd_std": 6e-05, "memory_before_bwd_mb": 4384.75, "peak_memory_mb": 12577.5}
+{"compiled": true, "d_head": 128, "seq_len": 8192, "fwd_mean": 0.008254, "fwd_std": 2e-05, "bwd_mean": 0.017393, "bwd_std": 8.2e-05, "memory_before_bwd_mb": 4385.0, "peak_memory_mb": 8514.0}
+{"d_head": 128, "seq_len": 16384, "fwd_mean": 0.054786, "fwd_std": 4.5e-05, "bwd_mean": 0.124, "bwd_std": 8e-05, "memory_before_bwd_mb": 16897.5, "peak_memory_mb": 49667.0}
+{"compiled": true, "d_head": 128, "seq_len": 16384, "fwd_mean": 0.032109, "fwd_std": 0.000271, "bwd_mean": 0.068674, "bwd_std": 0.000147, "memory_before_bwd_mb": 16898.0, "peak_memory_mb": 33348.0}
