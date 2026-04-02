@@ -9,6 +9,7 @@ mkdir -p "$OUT_DIR"
 uv run python -m cs336_systems.benchmark_attention \
     --device cuda \
     --results-file "$RESULTS_FILE" \
+    --compile \
 2>&1 | tee "${OUT_DIR}/benchmark.log"
 
 echo "=== Generating markdown table ==="
