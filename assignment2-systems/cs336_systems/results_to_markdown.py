@@ -19,9 +19,18 @@ def main():
 
     df = pd.DataFrame(records)
 
-    # format the time column as "mean ± std"
-    df["time (s)"] = df.apply(lambda r: f"{r['mean_time']:.4f} ± {r['std_time']:.4f}", axis=1)
-    df = df.drop(columns=["mean_time", "std_time"])
+    # format time columns depending on which benchmark produced the data
+    if "mean_time" in df.columns:
+        df["time (s)"] = df.apply(lambda r: f"{r['mean_time']:.4f} ± {r['std_time']:.4f}", axis=1)
+        df = df.drop(columns=["mean_time", "std_time"])
+    if "fwd_mean" in df.columns:
+        df["fwd (s)"] = df.apply(lambda r: f"{r['fwd_mean']:.6f} ± {r['fwd_std']:.6f}" if not r.get("OOM") else "OOM", axis=1)
+        df = df.drop(columns=["fwd_mean", "fwd_std"], errors="ignore")
+    if "bwd_mean" in df.columns:
+        df["bwd (s)"] = df.apply(lambda r: f"{r['bwd_mean']:.6f} ± {r['bwd_std']:.6f}" if not r.get("OOM") else "OOM", axis=1)
+        df = df.drop(columns=["bwd_mean", "bwd_std"], errors="ignore")
+    if "OOM" in df.columns:
+        df = df.drop(columns=["OOM"])
 
     md = df.to_markdown(index=False)
 
