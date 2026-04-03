@@ -305,38 +305,39 @@ if __name__== "__main__":
     vocab_path_owt = os.path.join(artifact_folder_path,"vocab_32k.json")
     merge_path_owt =  os.path.join(artifact_folder_path,"merges_32k.txt")
     dataset = ["tinystories_train.txt","openwebtext_train.txt","tinystories_val.txt","openwebtext_val.txt"]
-    # save_train_bpe(data_folder_path, dataset, special_tokens,vocab_path_ts, merge_path_ts, vocab_path_owt, merge_path_owt)
+    save_train_bpe(data_folder_path, dataset, special_tokens,vocab_path_ts, merge_path_ts, vocab_path_owt, merge_path_owt)
 
     split_tokens_bytes = split_tokens[0].encode("utf-8") 
-    #tokenizer_experiments(data_folder_path, vocab_path_ts, merge_path_ts, vocab_path_owt, merge_path_owt, split_tokens_bytes, dataset, special_tokens)
+    # Verify tokenizer
+    # tokenizer_experiments(data_folder_path, vocab_path_ts, merge_path_ts, vocab_path_owt, merge_path_owt, split_tokens_bytes, dataset, special_tokens)
     
-    # print("serialization of dataset")
-    # for data in dataset[::-1]:
-    #     print(f"serialization of {data}")
-    #     pr = cProfile.Profile()
-    #     pr.enable()
-    #     if data == "tinystories_train.txt" or data == "tinystories_val.txt":
-    #         serialization_data(data_path=data_folder_path,
-    #                         vocab_path=vocab_path_ts,
-    #                         merge_path=merge_path_ts,
-    #                         dataset=data, 
-    #                         split_tokens_bytes=split_tokens_bytes,
-    #                         special_tokens=special_tokens,
-    #                         artifact_folder_path=artifact_folder_path)
-    #     else : 
-    #         serialization_data(data_path=data_folder_path,
-    #             vocab_path=vocab_path_owt,
-    #             merge_path=merge_path_owt,
-    #             dataset=data, 
-    #             split_tokens_bytes=split_tokens_bytes,
-    #             special_tokens=special_tokens,
-    #             artifact_folder_path=artifact_folder_path)
-    #     pr.disable()
-    #     result = pstats.Stats(pr)
-    #     result.sort_stats(pstats.SortKey.TIME)
-    #     result.print_stats(20)
+    print("serialization of dataset")
+    for data in dataset[::-1]:
+        print(f"serialization of {data}")
+        pr = cProfile.Profile()
+        pr.enable()
+        if data == "tinystories_train.txt" or data == "tinystories_val.txt":
+            serialization_data(data_path=data_folder_path,
+                            vocab_path=vocab_path_ts,
+                            merge_path=merge_path_ts,
+                            dataset=data, 
+                            split_tokens_bytes=split_tokens_bytes,
+                            special_tokens=special_tokens,
+                            artifact_folder_path=artifact_folder_path)
+        else : 
+            serialization_data(data_path=data_folder_path,
+                vocab_path=vocab_path_owt,
+                merge_path=merge_path_owt,
+                dataset=data, 
+                split_tokens_bytes=split_tokens_bytes,
+                special_tokens=special_tokens,
+                artifact_folder_path=artifact_folder_path)
+        pr.disable()
+        result = pstats.Stats(pr)
+        result.sort_stats(pstats.SortKey.TIME)
+        result.print_stats(20)
 
-    learning_rate_tuning([1e1,1e2,1e3])
+    # learning_rate_tuning([1e1,1e2,1e3])
 
 
 """
