@@ -6,4 +6,4 @@ This project is about implementing:
 
 To understand and hands-on experience with improving single-GPU training speed and scaling training to multiple GPUs. 
 
-for all models, the vocab size will be 10 000 with a batch size of 4.
+for all models, the vocab size will be 10 000 with a batch size of 4. 
