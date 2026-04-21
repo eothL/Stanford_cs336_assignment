@@ -27,6 +27,12 @@ class FlashAttention(torch.autograd.Function):
                 k_j = K[:, j*Bk:(j+1)*Bk, :]
                 v_j = V[:, j*Bk:(j+1)*Bk, :]
                 s_j = (q_i @ k_j.transpose(-2, -1)) * scale
+
+                if is_causal:
+                    q_idx = i * Bq + torch.arange(0, Bq, device=Q.device)
+                    k_idx = j * Bk + torch.arange(0, Bk, device=Q.device)
+                    s_j = s_j + torch.where(q_idx[:, None] >= k_idx[None, :], 0.0, -1e6)
+
                 m_j = torch.maximum(m_i, torch.amax(s_j, dim=-1))
                 alpha = torch.exp(m_i - m_j)
                 P_tilde = torch.exp(s_j - m_j.unsqueeze(-1))
@@ -121,6 +127,12 @@ def flash_fwd_kernel(
         k_i = tl.load(K_block_ptr, boundary_check = (0,1), padding_option = "zero")
         v_i = tl.load(V_block_ptr, boundary_check = (0,1), padding_option = "zero")
         s = tl.dot(q_i, tl.trans(k_i)) * scale # (Bq, Bk)
+
+        if is_causal:
+            q_idx = query_tile_index * Q_TILE_SIZE + tl.arange(0, Q_TILE_SIZE)
+            k_idx = i * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)
+            s = s + tl.where( q_idx[:, None] >= k_idx[None, :], 0.0, -1e6)
+
         m_j = tl.maximum(m_i, tl.max(s, axis= -1))
         alpha = tl.exp(m_i - m_j)
         p_tilde = tl.exp(s - m_j[:, None])
@@ -128,8 +140,6 @@ def flash_fwd_kernel(
         o_i = alpha[:, None] * o_i 
         o_i = tl.dot(p_tilde.to(v_i.dtype), v_i, acc=o_i)
         m_i = m_j
-
-
         K_block_ptr = K_block_ptr.advance((K_TILE_SIZE, 0))
         V_block_ptr = V_block_ptr.advance((K_TILE_SIZE, 0))
 
@@ -142,6 +152,7 @@ class FlashAttentionTriton(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, Q, K, V, is_causal = False) -> Any:
+        Q, K, V = Q.contiguous(), K.contiguous(), V.contiguous()
         B, Nq, d = Q.shape
         Nk = K.shape[-2]
         scale = d**(-0.5)
@@ -150,7 +161,6 @@ class FlashAttentionTriton(torch.autograd.Function):
 
         O = torch.zeros_like(Q)
         L = torch.zeros((B, Nq), device=Q.device, dtype=torch.float32)
-        ctx.D_TILE_SIZE = triton.next_power_of_2(d) // 16
         ctx.Q_TILE_SIZE = 16
         ctx.K_TILE_SIZE = 16
         
