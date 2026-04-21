@@ -31,7 +31,7 @@ class FlashAttention(torch.autograd.Function):
                 if is_causal:
                     q_idx = i * Bq + torch.arange(0, Bq, device=Q.device)
                     k_idx = j * Bk + torch.arange(0, Bk, device=Q.device)
-                    s_j = s_j + torch.where(q_idx[:, None] >= k_idx[None, :], 0.0, -1e6)
+                    s_j = torch.where(q_idx[:, None] >= k_idx[None, :], s_j, -1e6)
 
                 m_j = torch.maximum(m_i, torch.amax(s_j, dim=-1))
                 alpha = torch.exp(m_i - m_j)
@@ -44,13 +44,32 @@ class FlashAttention(torch.autograd.Function):
             L[:, i*Bq:(i+1)*Bq] = m_i + torch.log(l_i)
             O[:, i*Bq:(i+1)*Bq, :] = o_i
 
-        ctx.save_for_backward(L, Q, K, V, O)
+        ctx.save_for_backward(O, L, Q, K, V)
         ctx.is_causal = is_causal
         return O
     
     @staticmethod
     def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
+        dQ, dK, dV = 1,1,1
+        O, L, Q, K, V = ctx.saved_tensors
+        _, Nq, d = Q.shape
+        scale = d**(-0.5)
+        S = Q@K.transpose(-2, -1) * scale
+        if ctx.is_causal :
+            Nk = K.shape[-2]
+            q_idx = torch.arange(Nq, device=Q.device)
+            k_idx = torch.arange(Nk, device=Q.device)
+            S = torch.where(q_idx >= k_idx, S, -1e6)
+
+        P = torch.exp(S - L.unsqueeze(-1))
+        dO = grad_outputs[0]
+        dV = P.transpose(-2,-1) @ dO
+        dP = dO@V.transpose(-2,-1)
+        D = (O*dO).sum(dim=-1, keepdim= True)
+        dS = P *(dP - D)
+        dQ = (dS@K) * scale
+        dK = (dS.transpose(-2, -1)@Q) * scale
+        return (dQ, dK, dV)
 
 @triton.jit
 def flash_fwd_kernel(
@@ -131,7 +150,7 @@ def flash_fwd_kernel(
         if is_causal:
             q_idx = query_tile_index * Q_TILE_SIZE + tl.arange(0, Q_TILE_SIZE)
             k_idx = i * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)
-            s = s + tl.where( q_idx[:, None] >= k_idx[None, :], 0.0, -1e6)
+            s = tl.where( q_idx[:, None] >= k_idx[None, :], s, -1e6)
 
         m_j = tl.maximum(m_i, tl.max(s, axis= -1))
         alpha = tl.exp(m_i - m_j)
@@ -185,7 +204,7 @@ class FlashAttentionTriton(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        raise NotImplementedError
+        O, L 
 
         
 def main():
