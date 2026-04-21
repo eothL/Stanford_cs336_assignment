@@ -48,7 +48,7 @@ class FlashAttention(torch.autograd.Function):
         ctx.is_causal = is_causal
         return O
     
-    @staticmethod
+    @torch.compile
     def backward(ctx: Any, *grad_outputs: Any) -> Any:
         dQ, dK, dV = 1,1,1
         O, L, Q, K, V = ctx.saved_tensors
@@ -59,7 +59,7 @@ class FlashAttention(torch.autograd.Function):
             Nk = K.shape[-2]
             q_idx = torch.arange(Nq, device=Q.device)
             k_idx = torch.arange(Nk, device=Q.device)
-            S = torch.where(q_idx >= k_idx, S, -1e6)
+            S = torch.where(q_idx[:, None] >= k_idx[None, :], S, -1e6)
 
         P = torch.exp(S - L.unsqueeze(-1))
         dO = grad_outputs[0]
@@ -69,7 +69,7 @@ class FlashAttention(torch.autograd.Function):
         dS = P *(dP - D)
         dQ = (dS@K) * scale
         dK = (dS.transpose(-2, -1)@Q) * scale
-        return (dQ, dK, dV)
+        return (dQ, dK, dV, None, None, None)
 
 @triton.jit
 def flash_fwd_kernel(
@@ -150,7 +150,7 @@ def flash_fwd_kernel(
         if is_causal:
             q_idx = query_tile_index * Q_TILE_SIZE + tl.arange(0, Q_TILE_SIZE)
             k_idx = i * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)
-            s = tl.where( q_idx[:, None] >= k_idx[None, :], s, -1e6)
+            s = tl.where( q_idx[:, None] >= k_idx[None, :], s, -1e6) # same as with additive bias s = s + tl.where( q_idx[:, None] >= k_idx[None, :], 0, -1e6)
 
         m_j = tl.maximum(m_i, tl.max(s, axis= -1))
         alpha = tl.exp(m_i - m_j)
@@ -165,7 +165,7 @@ def flash_fwd_kernel(
     o_i = o_i / l_i[:, None]
     tl.store(O_block_ptr, o_i, boundary_check= (0,1))
     tl.store(L_block_ptr, m_i + tl.log(l_i), boundary_check= (0,))
-        
+    
 
 class FlashAttentionTriton(torch.autograd.Function):
 
@@ -204,7 +204,9 @@ class FlashAttentionTriton(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        O, L 
+        O, L, Q, K, V = ctx.saved_tensors
+        raise NotImplementedError
+
 
         
 def main():
