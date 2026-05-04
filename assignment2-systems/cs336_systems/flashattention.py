@@ -47,10 +47,10 @@ class FlashAttention(torch.autograd.Function):
         ctx.save_for_backward(O, L, Q, K, V)
         ctx.is_causal = is_causal
         return O
+    
     @staticmethod
     @torch.compile
     def backward(ctx: Any, *grad_outputs: Any) -> Any:
-        dQ, dK, dV = 1,1,1
         O, L, Q, K, V = ctx.saved_tensors
         _, Nq, d = Q.shape
         scale = d**(-0.5)
@@ -65,8 +65,8 @@ class FlashAttention(torch.autograd.Function):
         dO = grad_outputs[0]
         dV = P.transpose(-2,-1) @ dO
         dP = dO@V.transpose(-2,-1)
-        D = (O*dO).sum(dim=-1, keepdim= True)
-        dS = P *(dP - D)
+        D_i = (O*dO).sum(dim=-1, keepdim= True)
+        dS = P *(dP - D_i)
         dQ = (dS@K) * scale
         dK = (dS.transpose(-2, -1)@Q) * scale
         return (dQ, dK, dV, None, None, None)
@@ -76,8 +76,8 @@ def flash_fwd_kernel(
     Q_ptr, K_ptr, V_ptr,
     O_ptr, L_ptr,
     stride_qb, stride_qq, stride_qd,
-    stride_kb, stride_kq, stride_kd,
-    stride_vb, stride_vq, stride_vd,
+    stride_kb, stride_kk, stride_kd,
+    stride_vb, stride_vk, stride_vd,
     stride_ob, stride_oq, stride_od,
     stride_lb, stride_lq, 
     N_QUERIES, N_KEYS,
@@ -104,7 +104,7 @@ def flash_fwd_kernel(
     K_block_ptr = tl.make_block_ptr(
         K_ptr + batch_index * stride_kb,
         shape = (N_KEYS, D),
-        strides = (stride_kq, stride_kd),
+        strides = (stride_kk, stride_kd),
         offsets = (0, 0),
         block_shape= (K_TILE_SIZE, D),
         order=(1, 0),
@@ -112,7 +112,7 @@ def flash_fwd_kernel(
     V_block_ptr = tl.make_block_ptr(
         V_ptr + batch_index * stride_vb,
         shape = (N_KEYS, D),
-        strides = (stride_vq, stride_vd),
+        strides = (stride_vk, stride_vd),
         offsets =(0, 0),
         block_shape= (K_TILE_SIZE, D),
         order=(1, 0),
@@ -166,6 +166,86 @@ def flash_fwd_kernel(
     tl.store(O_block_ptr, o_i, boundary_check= (0,1))
     tl.store(L_block_ptr, m_i + tl.log(l_i), boundary_check= (0,))
     
+@triton.jit
+def d_bwd_kernel(
+    O_ptr, dO_ptr, D_ptr,
+    stride_ob, stride_oq, stride_od,
+    stride_dob, stride_doq, stride_dod,
+    stride_db, stride_dq,
+    N_QUERIES, 
+    D: tl.constexpr,
+    Q_TILE_SIZE : tl.constexpr,
+):
+    output_tile_index = tl.program_id(0)
+    batch_index = tl.program_id(1) 
+
+    O_block_ptr = tl.make_block_ptr(
+        base = O_ptr + batch_index * stride_ob,
+        shape = (N_QUERIES,D),
+        strides = (stride_oq, stride_od),
+        offsets = (output_tile_index * Q_TILE_SIZE, 0),
+        block_shape = (Q_TILE_SIZE, D),
+        order = (1,0)
+    )
+    dO_block_ptr = tl.make_block_ptr(
+        base = dO_ptr + batch_index * stride_dob, # start at the right batch for dO_ptr 
+        shape = (N_QUERIES, D), # matrix size
+        strides = (stride_doq, stride_dod), 
+        offsets = (output_tile_index * Q_TILE_SIZE,0), # start at the right tile
+        block_shape = (Q_TILE_SIZE, D), # block size
+        order = (1, 0), # row major matrix
+    )
+    D_block_ptr = tl.make_block_ptr(
+        base = D_ptr + batch_index * stride_db,
+        shape = (N_QUERIES,),
+        strides = (stride_dq,),
+        offsets = (output_tile_index * Q_TILE_SIZE,),
+        block_shape = (Q_TILE_SIZE,),
+        order = (0,),
+    )
+
+    O = tl.load(O_block_ptr, boundary_check = (0, 1), padding_option = "zero")
+    dO = tl.load(dO_block_ptr, boundary_check = (0, 1), padding_option = "zero")
+
+    D_i = tl.sum(O * dO, axis=-1) # (Bq, )
+    O_block_ptr = O_block_ptr.advance((Q_TILE_SIZE, 0))
+    dO_block_ptr = dO_block_ptr.advance((Q_TILE_SIZE,))
+
+    tl.store(D_block_ptr, D_i, boundary_check = (0,))
+
+
+@triton.jit
+def kv_bwd_kernel(
+    Q_ptr, K_ptr, V_ptr, D_ptr,
+    stride_qb, stride_qq, stride_qd,
+    stride_kb, stride_kk, stride_kd,
+    stride_vb, stride_kv, stride_vd,
+    stride_db, stride_dq,
+    N_QUERIES: tl.constexpr, N_KEYS:tl.constexpr,
+    Q_TILE_SIZE: tl.constexpr,
+    K_TILE_SIZE: tl.constexpr,
+    D: tl.constexpr,
+    is_causal: tl.constexpr,
+):
+    query_tile_index = tl.program_id(0)
+    batch_index = tl.program_id(0)
+
+    Q_blk_ptr = tl.make_block_ptr(
+        base = Q_ptr + batch_index * stride_qb,
+        offsets = (query_tile_index * Q_TILE_SIZE, 0),
+        strides = (stride_qq, stride_qd),
+        block_shape = (Q_TILE_SIZE, D),
+        shape = (N_QUERIES, D),
+        order = (1, 0),
+    )
+    Q_blk_ptr = 
+
+
+@triton.jit
+def query_bwd_kernel(
+
+):
+
 
 class FlashAttentionTriton(torch.autograd.Function):
 
@@ -205,8 +285,27 @@ class FlashAttentionTriton(torch.autograd.Function):
     @staticmethod
     def backward(ctx: Any, *grad_outputs: Any) -> Any:
         O, L, Q, K, V = ctx.saved_tensors
-        raise NotImplementedError
+        B, Nq, D = Q.shape
+        Nk = K.shape[-2]
+        scale = D**(0.5)
+        ctx.Q_TILE_SIZE = 16
+        ctx.K_TILE_SIZE = 16
 
+        grid = (triton.cdiv(Nq, ctx.Q_TILE_SIZE), B)
+        flash_bwd_kernel[grid](
+            Q, K, V, O, L,
+            Q.stride(0), Q.stride(1), Q.stride(2), 
+            K.stride(0), K.stride(1), K.stride(2),
+            V.stride(0), V.stride(1), V.stride(2),
+            O.stride(0), O.stride(1), O.stride(2),
+            L.stride(0), L.stride(1),
+            Nq, Nk,
+            scale,
+            D=D,
+            Q_TILE_SIZE=ctx.Q_TILE_SIZE,
+            K_TILE_SIZE=ctx.K_TILE_SIZE,
+            ctx = ctx
+        )
 
         
 def main():
