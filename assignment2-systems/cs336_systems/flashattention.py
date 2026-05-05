@@ -208,8 +208,6 @@ def d_bwd_kernel(
     dO = tl.load(dO_block_ptr, boundary_check = (0, 1), padding_option = "zero")
 
     D_i = tl.sum(O * dO, axis=-1) # (Bq, )
-    O_block_ptr = O_block_ptr.advance((Q_TILE_SIZE, 0))
-    dO_block_ptr = dO_block_ptr.advance((Q_TILE_SIZE,))
 
     tl.store(D_block_ptr, D_i, boundary_check = (0,))
 
@@ -506,34 +504,81 @@ class FlashAttentionTriton(torch.autograd.Function):
             K_TILE_SIZE=ctx.K_TILE_SIZE,
             is_causal=is_causal,
         )
-        ctx.save_for_backward(L, Q, K, V, O)
+        ctx.save_for_backward(O, L, Q, K, V)
         ctx.is_causal = is_causal
         return  O
 
     @staticmethod
     def backward(ctx: Any, *grad_outputs: Any) -> Any:
         O, L, Q, K, V = ctx.saved_tensors
+        dO = grad_outputs[0]
         B, Nq, D = Q.shape
         Nk = K.shape[-2]
-        scale = D**(0.5)
-        ctx.Q_TILE_SIZE = 16
-        ctx.K_TILE_SIZE = 16
+        No = O.shape[-2]
+        scale = D**(-0.5)
+        Bq, Bk = ctx.Q_TILE_SIZE, ctx.K_TILE_SIZE
 
-        grid = (triton.cdiv(Nq, ctx.Q_TILE_SIZE), B)
-        flash_bwd_kernel[grid](
-            Q, K, V, O, L,
-            Q.stride(0), Q.stride(1), Q.stride(2), 
+        # init matrix
+        D_buf = torch.zeros((B, Nq), device = Q.device, dtype = torch.float32)
+        dK = torch.zeros_like(K)
+        dV = torch.zeros_like(V)
+        dQ = torch.zeros_like(Q)
+
+        # init grid
+        grid_o = (triton.cdiv(No, Bq), B)
+        grid_k = (triton.cdiv(Nk, Bk), B)
+        grid_q = (triton.cdiv(Nq, Bq), B)
+
+        d_bwd_kernel[grid_o](
+            O, dO, D_buf,
+            O.stride(0), O.stride(1), O.stride(2),
+            dO.stride(0), dO.stride(1), dO.stride(2),
+            D_buf.stride(0), D_buf.stride(1),
+            N_QUERIES = Nq,
+            D = D,
+            Q_TILE_SIZE = ctx.Q_TILE_SIZE,
+        )
+        kv_bwd_kernel[grid_k](
+            Q, K, V, D_buf,
+            dK, dV, dO,
+            L,
+            Q.stride(0), Q.stride(1), Q.stride(2),
             K.stride(0), K.stride(1), K.stride(2),
             V.stride(0), V.stride(1), V.stride(2),
-            O.stride(0), O.stride(1), O.stride(2),
+            dK.stride(0), dK.stride(1), dK.stride(2),
+            dV.stride(0), dV.stride(1), dV.stride(2),
+            dO.stride(0), dO.stride(1), dO.stride(2),
+            D_buf.stride(0), D_buf.stride(1),
             L.stride(0), L.stride(1),
-            Nq, Nk,
-            scale,
-            D=D,
-            Q_TILE_SIZE=ctx.Q_TILE_SIZE,
-            K_TILE_SIZE=ctx.K_TILE_SIZE,
-            ctx = ctx
+            N_QUERIES = Nq,
+            N_KEYS = Nk,
+            scale = scale,
+            is_causal = ctx.is_causal,
+            Q_TILE_SIZE = ctx.Q_TILE_SIZE,
+            K_TILE_SIZE = ctx.K_TILE_SIZE,
+            D = D
         )
+        q_bwd_kernel[grid_q](
+            Q, K, V, D_buf,
+            dQ, dO,
+            L,
+            Q.stride(0), Q.stride(1), Q.stride(2),
+            K.stride(0), K.stride(1), K.stride(2),
+            V.stride(0), V.stride(1), V.stride(2),
+            dQ.stride(0), dQ.stride(1), dQ.stride(2),
+            dO.stride(0), dO.stride(1), dO.stride(2),
+            D_buf.stride(0), D_buf.stride(1),
+            L.stride(0), L.stride(1),
+            N_QUERIES = Nq,
+            N_KEYS = Nk,
+            scale = scale,
+            is_causal = ctx.is_causal,
+            Q_TILE_SIZE = ctx.Q_TILE_SIZE,
+            K_TILE_SIZE = ctx.K_TILE_SIZE,
+            D = D
+        )
+
+        return dQ, dK, dV, None
 
         
 def main():
