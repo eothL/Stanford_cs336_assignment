@@ -135,7 +135,7 @@ def flash_fwd_kernel(
     )
 
 
-    Tk = triton.cdiv(N_KEYS, K_TILE_SIZE)
+    Tk = tl.cdiv(N_KEYS, K_TILE_SIZE)
 
     # init variable
     q_i = tl.load(Q_block_ptr, boundary_check= (0, 1), padding_option = "zero")
@@ -300,7 +300,7 @@ def kv_bwd_kernel(
         order = (0, ),
     )
 
-    Tq = triton.cdiv(N_QUERIES, Q_TILE_SIZE)
+    Tq = tl.cdiv(N_QUERIES, Q_TILE_SIZE)
     k_i = tl.load(K_blk_ptr, boundary_check = (0, 1), padding_option = "zero")
     v_i = tl.load(V_blk_ptr, boundary_check = (0, 1), padding_option = "zero")
     dv_i = tl.zeros((K_TILE_SIZE, D), tl.float32)
@@ -433,7 +433,7 @@ def q_bwd_kernel(
         order = (0, ),
     )
 
-    Tk = triton.cdiv(N_KEYS, K_TILE_SIZE)
+    Tk = tl.cdiv(N_KEYS, K_TILE_SIZE)
     
     q_i = tl.load(Q_blk_ptr, boundary_check = (0, 1), padding_option = "zero")
     l_i = tl.load(L_blk_ptr, boundary_check = (0,), padding_option = "zero")
