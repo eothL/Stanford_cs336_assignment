@@ -19,14 +19,12 @@ import sys
 
 import torch
 
-# Faithful to the PDF: seq_len powers of 2 in [128, 65536],
-# d_head powers of 2 in [16, 128], precisions {bf16, fp32}.
 SEQ_LENS = (128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536)
 D_HEADS = (16, 32, 64, 128)
 DTYPES = ("bfloat16", "float32")
 
-BATCH_SIZE = 1          # the problem mandates batch size 1
-IS_CAUSAL = True        # the problem mandates causal masking
+BATCH_SIZE = 1          
+IS_CAUSAL = True        
 DEVICE = "cuda"         
 
 
@@ -77,30 +75,15 @@ def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.
     return FlashAttention.apply(q, k, v, IS_CAUSAL)
 
 
-# ───────────────────────── TODO ─────────────────────────
+# ───────────────────────── benchmark implementation ─────────────────────────
 def bench_one(impl, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, warmup:int = 25, rep:int = 100) -> dict[str, float]:
     """Time forward, backward, and end-to-end with triton.testing.do_bench.
 
     `impl` is one of the (q,k,v) -> o callables above.
 
     do_bench(fn, warmup=..., rep=..., grad_to_none=[...]) runs `fn` many
-    times and returns the median latency in milliseconds. Three closures:
-
-      1. forward only:  run `impl` under torch.no_grad() so no graph is built.
-
-      2. end-to-end:    `impl(q,k,v).sum().backward()`. q/k/v require grad,
-                        so pass grad_to_none=[q, k, v] to do_bench, otherwise
-                        grads accumulate across reps and pollute the timing.
-
-      3. backward only: THE TRAP. If you build the graph once outside the
-                        timed fn and call .backward() repeatedly, the 2nd
-                        call dies ("backward through the graph a second
-                        time"). Fix: precompute `o = impl(q,k,v)` once, then
-                        time `o.sum().backward(retain_graph=True)` with
-                        grad_to_none=[q, k, v]. Keep `import triton.testing`
-                        local to this function so the file still imports on
-                        a triton-less laptop.
-
+    times and returns the median latency in milliseconds.
+    
     Return: {"fwd_ms": ..., "bwd_ms": ..., "full_ms": ...}
     """
     from triton.testing import do_bench
