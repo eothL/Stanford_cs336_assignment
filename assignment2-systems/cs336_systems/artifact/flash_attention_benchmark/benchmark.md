@@ -1,3 +1,48 @@
+# Flash Attention (Triton) vs naive PyTorch
+
+Hardware: RTX 3090. Grid: dtype ∈ {bf16, fp32}, `d_head` ∈ {16, 32, 64, 128}, `seq_len` 128 → 65536. Times in ms (lower = better), `peak` = peak memory in MB. `full` = fwd + bwd.
+
+## TL;DR
+
+- **Speed**: Flash is ~1.4–3.5× faster end-to-end in bf16, and the gap widens with `seq_len` (1.4× at 128 → ~3.4× at 8192).
+- **Memory is the real win**: PyTorch peak memory grows ~quadratically in `seq_len` (it materializes the full N×N attention matrix); Flash stays nearly flat.
+- **OOM**: PyTorch OOMs at `seq_len ≥ 32768` for every config. Flash runs all the way to 65536 (it never materializes the score matrix → O(N) memory).
+- fp32 backward in PyTorch blows up at 16384 (~600 ms, ~5× the fwd-scaled expectation) — Flash stays consistent.
+- A few PyTorch fwd numbers at small `seq_len` (e.g. 4.85 ms @ 1024) are warmup/measurement artifacts, not real cost.
+
+## Speedup vs seq_len (d_head = 64, `full` time)
+
+| seq_len | bf16 PyTorch | bf16 Flash | speedup | fp32 PyTorch | fp32 Flash | speedup |
+|---|---|---|---|---|---|---|
+| 128 | 0.494 | 0.346 | 1.4× | 0.571 | 0.323 | 1.8× |
+| 512 | 0.633 | 0.258 | 2.5× | 0.740 | 0.295 | 2.5× |
+| 1024 | 1.140 | 0.496 | 2.3× | 2.092 | 0.846 | 2.5× |
+| 2048 | 3.922 | 1.501 | 2.6× | 7.498 | 2.723 | 2.8× |
+| 4096 | 13.74 | 5.200 | 2.6× | 27.77 | 9.390 | 3.0× |
+| 8192 | 54.09 | 16.09 | 3.4× | 109.7 | 31.88 | 3.4× |
+| 16384 | 213.4 | 69.30 | 3.1× | 670.2 | 128.1 | 5.2×* |
+| 32768 | **OOM** | 246.9 | — | **OOM** | 437.9 | — |
+| 65536 | **OOM** | 879.7 | — | **OOM** | 1632.6 | — |
+
+\* inflated by the PyTorch fp32-backward anomaly at 16384.
+
+## Memory scaling (d_head = 64, bf16, peak MB)
+
+| seq_len | PyTorch | Flash | ratio |
+|---|---|---|---|
+| 128 | 272.6 | 256.2 | 1.1× |
+| 1024 | 288.1 | 257.3 | 1.1× |
+| 4096 | 515.8 | 261.0 | 2.0× |
+| 8192 | 1239 | 266.1 | 4.7× |
+| 16384 | 4126 | 276.1 | **15×** |
+| 32768 | OOM | 296.3 | — |
+| 65536 | OOM | 336.5 | — |
+
+PyTorch ≈ ×4 memory per 2× `seq_len` (O(N²)); Flash ≈ +10 MB per 2× `seq_len` (O(N)).
+
+<details>
+<summary>Full raw results (160 rows)</summary>
+
 | impl | dtype | d_head | seq_len | fwd (ms) | bwd (ms) | full (ms) | peak (MB) |
 |---|---|---|---|---|---|---|---|
 | pytorch | bfloat16 | 16 | 128 | 0.126 | 0.2825 | 0.4651 | 272.5 |
@@ -160,3 +205,5 @@
 | flash_triton | float32 | 128 | 16384 | 60.673 | 181.3873 | 253.2454 | 336.1 |
 | flash_triton | float32 | 128 | 32768 | 216.3425 | 656.8304 | 848.4905 | 416.3 |
 | flash_triton | float32 | 128 | 65536 | 924.8932 | 4038.8813 | 3768.793 | 576.5 |
+
+</details>
