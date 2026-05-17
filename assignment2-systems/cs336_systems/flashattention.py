@@ -16,7 +16,7 @@ class FlashAttention(torch.autograd.Function):
         O = torch.zeros_like(Q)
         L = torch.zeros(B, Nq, device= Q.device, dtype= Q.dtype)
 
-        Tq, Tk = Nq // Bq, Nk // Bk
+        Tq, Tk = triton.cdiv(Nq, Bq), triton.cdiv(Nk, Bk)
         for i in range(Tq):
             q_i = Q[:, i*Bq:(i+1)*Bq, :] # (B, Bq, d)
             m_i = torch.full((B,Bq), float("-inf"), device= Q.device, dtype=Q.dtype)
@@ -135,7 +135,7 @@ def flash_fwd_kernel(
     )
 
 
-    Tk = N_KEYS // K_TILE_SIZE
+    Tk = triton.cdiv(N_KEYS, K_TILE_SIZE)
 
     # init variable
     q_i = tl.load(Q_block_ptr, boundary_check= (0, 1), padding_option = "zero")
@@ -300,7 +300,7 @@ def kv_bwd_kernel(
         order = (0, ),
     )
 
-    Tq = N_QUERIES // Q_TILE_SIZE
+    Tq = triton.cdiv(N_QUERIES, Q_TILE_SIZE)
     k_i = tl.load(K_blk_ptr, boundary_check = (0, 1), padding_option = "zero")
     v_i = tl.load(V_blk_ptr, boundary_check = (0, 1), padding_option = "zero")
     dv_i = tl.zeros((K_TILE_SIZE, D), tl.float32)
@@ -433,7 +433,7 @@ def q_bwd_kernel(
         order = (0, ),
     )
 
-    Tk = N_KEYS // K_TILE_SIZE
+    Tk = triton.cdiv(N_KEYS, K_TILE_SIZE)
     
     q_i = tl.load(Q_blk_ptr, boundary_check = (0, 1), padding_option = "zero")
     l_i = tl.load(L_blk_ptr, boundary_check = (0,), padding_option = "zero")
