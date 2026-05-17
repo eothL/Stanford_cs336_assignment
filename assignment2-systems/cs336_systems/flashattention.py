@@ -410,7 +410,7 @@ def q_bwd_kernel(
     )
     dO_blk_ptr = tl.make_block_ptr(
         base = dO_ptr + batch_index * stride_dob,
-        offsets = (0, 0),
+        offsets = (query_tile_index * Q_TILE_SIZE, 0),
         strides = (stride_doq, stride_dod),
         block_shape = (Q_TILE_SIZE, D),
         shape = (N_QUERIES, D),
