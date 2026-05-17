@@ -14,7 +14,7 @@ import argparse
 import itertools
 
 import torch
-import time 
+
 # Faithful to the PDF: seq_len powers of 2 in [128, 65536],
 # d_head powers of 2 in [16, 128], precisions {bf16, fp32}.
 SEQ_LENS = (128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536)
@@ -74,7 +74,7 @@ def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.
 
 
 # ───────────────────────── TODO ─────────────────────────
-def bench_one(impl, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> dict[str, float]:
+def bench_one(impl, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, warmup:int = 25, rep:int = 100) -> dict[str, float]:
     """Time forward, backward, and end-to-end with triton.testing.do_bench.
 
     `impl` is one of the (q,k,v) -> o callables above.
@@ -99,8 +99,23 @@ def bench_one(impl, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> dict[s
 
     Return: {"fwd_ms": ..., "bwd_ms": ..., "full_ms": ...}
     """
+    from triton.testing import do_bench
+    def fwd():
+        with torch.no_grad():
+            impl(q, k, v)
 
+    def full():
+        impl(q, k, v).sum().backward() 
+    
+    o = impl(q, k, v)
+    loss = o.sum()
+    def bwd():
+        loss.backward(retain_graph=True) # retain_graph to keep the graph through the repetition
 
+    fwd_ms = do_bench(fwd, warmup=warmup, rep=rep)
+    full_ms = do_bench(full, warmup=warmup, rep=rep, grad_to_none= [q, k, v])
+    bwd_ms = do_bench(bwd, warmup=warmup, rep=rep,  grad_to_none= [q, k, v])
+    return {"fwd_ms":fwd_ms, "full_ms": full_ms, "bwd_ms": bwd_ms}
 
 
 # ─────────────────────── orchestration ───────────────────────
@@ -113,7 +128,7 @@ def run_sweep(seq_lens, d_heads, dtype_names, warmup, rep) -> list[dict]:
             try:
                 q, k, v = make_inputs(seq_len, d_head, dtype)
                 torch.cuda.reset_peak_memory_stats()
-                timings = bench_one(impl, q, k, v)
+                timings = bench_one(impl, q, k, v, warmup, rep)
                 peak_mb = round(torch.cuda.max_memory_allocated() / (1024 ** 2), 1)
                 row = {
                     "impl": impl_name, "dtype": dtype_name,
