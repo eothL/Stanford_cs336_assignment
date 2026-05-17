@@ -11,7 +11,11 @@ Debug a small grid locally first:
 from __future__ import annotations
 
 import argparse
+import gc
 import itertools
+import json
+import subprocess
+import sys
 
 import torch
 
@@ -107,46 +111,111 @@ def bench_one(impl, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, warmup:in
     def full():
         impl(q, k, v).sum().backward() 
     
+    fwd_ms = do_bench(fwd, warmup=warmup, rep=rep)
+    full_ms = do_bench(full, warmup=warmup, rep=rep, grad_to_none= [q, k, v])
+    
     o = impl(q, k, v)
     loss = o.sum()
     def bwd():
         loss.backward(retain_graph=True) # retain_graph to keep the graph through the repetition
-
-    fwd_ms = do_bench(fwd, warmup=warmup, rep=rep)
-    full_ms = do_bench(full, warmup=warmup, rep=rep, grad_to_none= [q, k, v])
     bwd_ms = do_bench(bwd, warmup=warmup, rep=rep,  grad_to_none= [q, k, v])
     return {"fwd_ms":fwd_ms, "full_ms": full_ms, "bwd_ms": bwd_ms}
 
 
 # ─────────────────────── orchestration ───────────────────────
-def run_sweep(seq_lens, d_heads, dtype_names, warmup, rep) -> list[dict]:
-    rows: list[dict] = []
-    for impl_name, impl in (("pytorch", pytorch_attention), ("flash_triton", flash_attention)):
+IMPLS = {"pytorch": pytorch_attention, "flash_triton": flash_attention}
+RESULT_PREFIX = "RESULT_JSON "
+
+
+def bench_single(impl_name: str, dtype_name: str, d_head: int, seq_len: int,
+                 warmup: int, rep: int) -> dict:
+    """Benchmark exactly one config IN-PROCESS. Returns a result/OOM row.
+
+    Handles the *recoverable* allocator OOM (case 1): catch, reclaim, and
+    return an {"oom": True} row. A non-OOM RuntimeError is re-raised so a
+    real kernel/shape bug is never silently mislabelled as OOM. The hard
+    cases (poisoned CUDA context, OOM-kill) are NOT handled here — that is
+    what the subprocess isolation in run_sweep_isolated is for.
+    """
+    impl = IMPLS[impl_name]
+    dtype = _dtype(dtype_name)
+    base = {"impl": impl_name, "dtype": dtype_name,
+            "d_head": d_head, "seq_len": seq_len}
+    q = k = v = None
+    try:
+        q, k, v = make_inputs(seq_len, d_head, dtype)
+        torch.cuda.reset_peak_memory_stats()
+        timings = bench_one(impl, q, k, v, warmup, rep)
+        peak_mb = round(torch.cuda.max_memory_allocated() / (1024 ** 2), 1)
+        return {**base, **{key: round(value, 4) for key, value in timings.items()},
+                "peak_mb": peak_mb}
+    except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+        if "out of memory" not in str(e).lower():
+            raise  # a genuine bug, not OOM — don't swallow it
+        return {**base, "oom": True}
+    finally:
+        q = k = v = None  # drop the only refs so the graph is collectable
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
+def _format_row(tag: str, row: dict) -> str:
+    if row.get("oom"):
+        return f"{tag} | OOM"
+    return (f"{tag} | fwd={row['fwd_ms']:>9} bwd={row['bwd_ms']:>9} "
+            f"full={row['full_ms']:>9} ms | peak={row['peak_mb']} MB")
+
+
+def _cases(seq_lens, d_heads, dtype_names):
+    for impl_name in IMPLS:
         for dtype_name, d_head, seq_len in itertools.product(dtype_names, d_heads, seq_lens):
-            dtype = _dtype(dtype_name)
-            tag = f"{impl_name:<13} dtype={dtype_name:<8} d={d_head:<3} seq={seq_len:<6}"
-            try:
-                q, k, v = make_inputs(seq_len, d_head, dtype)
-                torch.cuda.reset_peak_memory_stats()
-                timings = bench_one(impl, q, k, v, warmup, rep)
-                peak_mb = round(torch.cuda.max_memory_allocated() / (1024 ** 2), 1)
-                row = {
-                    "impl": impl_name, "dtype": dtype_name,
-                    "d_head": d_head, "seq_len": seq_len,
-                    **{key: round(value, 4) for key, value in timings.items()},
-                    "peak_mb": peak_mb,
-                }
-                rows.append(row)
-                print(f"{tag} | fwd={row['fwd_ms']:>9} bwd={row['bwd_ms']:>9} "
-                      f"full={row['full_ms']:>9} ms | peak={peak_mb} MB")
-            except torch.cuda.OutOfMemoryError:
-                rows.append({"impl": impl_name, "dtype": dtype_name,
-                             "d_head": d_head, "seq_len": seq_len, "oom": True})
-                print(f"{tag} | OOM")
-                torch.cuda.empty_cache()
-            finally:
-                del q, k, v
-                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            yield impl_name, dtype_name, d_head, seq_len
+
+
+def run_sweep(seq_lens, d_heads, dtype_names, warmup, rep) -> list[dict]:
+    """In-process sweep. Survives case-1 OOM only; a poisoned context will
+    cascade. Fast for local debugging of small grids."""
+    rows: list[dict] = []
+    for impl_name, dtype_name, d_head, seq_len in _cases(seq_lens, d_heads, dtype_names):
+        tag = f"{impl_name:<13} dtype={dtype_name:<8} d={d_head:<3} seq={seq_len:<6}"
+        row = bench_single(impl_name, dtype_name, d_head, seq_len, warmup, rep)
+        print(_format_row(tag, row))
+        rows.append(row)
+    return rows
+
+
+def _parse_result(stdout: str) -> dict | None:
+    for line in stdout.splitlines():
+        if line.startswith(RESULT_PREFIX):
+            return json.loads(line[len(RESULT_PREFIX):])
+    return None
+
+
+def run_sweep_isolated(seq_lens, d_heads, dtype_names, warmup, rep,
+                       timeout: int) -> list[dict]:
+    """One subprocess per config. The child's CUDA context dies with it, so
+    a poisoned context / OOM-kill / segfault on one cell cannot take down
+    the rest of the sweep — the parent just records OOM and moves on."""
+    rows: list[dict] = []
+    for impl_name, dtype_name, d_head, seq_len in _cases(seq_lens, d_heads, dtype_names):
+        tag = f"{impl_name:<13} dtype={dtype_name:<8} d={d_head:<3} seq={seq_len:<6}"
+        cmd = [sys.executable, "-m", "cs336_systems.flash_benchmarking",
+               "--single", impl_name, dtype_name, str(d_head), str(seq_len),
+               "--warmup", str(warmup), "--rep", str(rep)]
+        row: dict | None = None
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            row = _parse_result(proc.stdout)
+        except subprocess.TimeoutExpired:
+            row = None  # treat a hung config as unusable
+        if row is None:
+            row = {"impl": impl_name, "dtype": dtype_name,
+                   "d_head": d_head, "seq_len": seq_len, "oom": True}
+            print(f"{tag} | OOM / crash / timeout (child died)")
+        else:
+            print(_format_row(tag, row))
+        rows.append(row)
     return rows
 
 
@@ -174,16 +243,43 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rep", type=int, default=100, help="do_bench rep (ms)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--results-file", type=str, default=None, help="write the markdown table here")
+    p.add_argument("--in-process", action="store_true",
+                   help="run the sweep in this process (fast local debugging; "
+                        "a poisoned CUDA context will cascade). Default is "
+                        "subprocess isolation, one child per config.")
+    p.add_argument("--timeout", type=int, default=1200,
+                   help="per-config child timeout in seconds (isolated mode)")
+    p.add_argument("--single", nargs=4, default=None,
+                   metavar=("IMPL", "DTYPE", "D_HEAD", "SEQ_LEN"),
+                   help="internal: benchmark one config and print one "
+                        "RESULT_JSON line. Used by the isolated runner.")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     torch.manual_seed(args.seed)
-    print(f"flash_benchmarking | device={DEVICE} batch={BATCH_SIZE} causal={IS_CAUSAL}")
+
+    # Child mode: benchmark exactly one config, emit one machine-readable
+    # line, exit. A recoverable OOM still prints a RESULT_JSON oom row (exit
+    # 0); an unrecoverable failure just kills this process and the parent
+    # records OOM from the missing line.
+    if args.single is not None:
+        impl_name, dtype_name, d_head, seq_len = args.single
+        row = bench_single(impl_name, dtype_name, int(d_head), int(seq_len),
+                           args.warmup, args.rep)
+        print(RESULT_PREFIX + json.dumps(row))
+        return
+
+    print(f"flash_benchmarking | device={DEVICE} batch={BATCH_SIZE} causal={IS_CAUSAL} "
+          f"| mode={'in-process' if args.in_process else 'isolated'}")
     print("=" * 100)
 
-    rows = run_sweep(args.seq_lens, args.d_heads, args.dtypes, args.warmup, args.rep)
+    if args.in_process:
+        rows = run_sweep(args.seq_lens, args.d_heads, args.dtypes, args.warmup, args.rep)
+    else:
+        rows = run_sweep_isolated(args.seq_lens, args.d_heads, args.dtypes,
+                                  args.warmup, args.rep, args.timeout)
 
     print("=" * 100)
     table = format_table(rows)
