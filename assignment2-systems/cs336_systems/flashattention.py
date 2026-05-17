@@ -163,7 +163,7 @@ def flash_fwd_kernel(
         V_block_ptr = V_block_ptr.advance((K_TILE_SIZE, 0))
 
     o_i = o_i / l_i[:, None]
-    tl.store(O_block_ptr, o_i, boundary_check= (0,1))
+    tl.store(O_block_ptr, o_i.to(O_block_ptr.type.element_ty), boundary_check= (0,1))
     tl.store(L_block_ptr, m_i + tl.log(l_i), boundary_check= (0,))
     
 @triton.jit
@@ -209,7 +209,7 @@ def d_bwd_kernel(
 
     D_i = tl.sum(O * dO, axis=-1) # (Bq, )
 
-    tl.store(D_block_ptr, D_i, boundary_check = (0,))
+    tl.store(D_block_ptr, D_i.to(D_block_ptr.type.element_ty), boundary_check = (0,))
 
 
 @triton.jit
