@@ -138,13 +138,18 @@ def flash_fwd_kernel(
 
 
     Tk = tl.cdiv(N_KEYS, K_TILE_SIZE)
+    # some Key tile are fully masked for Q tile for i: (query_tile_index + 1)*Q_TILE_SIZE <= i* K_TILE_SIZE
+    if is_causal:
+        j_end = tl.cdiv((query_tile_index + 1) * Q_TILE_SIZE, K_TILE_SIZE)
+    else :
+        j_end = Tk
 
     # init variable
     q_i = tl.load(Q_block_ptr, boundary_check= (0, 1), padding_option = "zero")
     m_i = tl.full((Q_TILE_SIZE,), float("-inf"), tl.float32) 
     l_i = tl.zeros((Q_TILE_SIZE,), tl.float32)
     o_i = tl.zeros((Q_TILE_SIZE, D), tl.float32)
-    for i in range(Tk):
+    for i in range(j_end):
         k_i = tl.load(K_block_ptr, boundary_check = (0,1), padding_option = "zero")
         v_i = tl.load(V_block_ptr, boundary_check = (0,1), padding_option = "zero")
         s = tl.dot(q_i, tl.trans(k_i)) * scale # (Bq, Bk)
@@ -153,7 +158,7 @@ def flash_fwd_kernel(
             q_idx = query_tile_index * Q_TILE_SIZE + tl.arange(0, Q_TILE_SIZE)
             k_idx = i * K_TILE_SIZE + tl.arange(0, K_TILE_SIZE)
             s = tl.where( q_idx[:, None] >= k_idx[None, :], s, -1e6) # same as with additive bias s = s + tl.where( q_idx[:, None] >= k_idx[None, :], 0, -1e6)
-
+        
         m_j = tl.maximum(m_i, tl.max(s, axis= -1))
         alpha = tl.exp(m_i - m_j)
         p_tilde = tl.exp(s - m_j[:, None])
